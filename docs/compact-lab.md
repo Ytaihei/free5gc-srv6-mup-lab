@@ -5,10 +5,14 @@ English | [日本語](compact-lab.ja.md)
 ## Status and release boundary
 
 This is an **experimental implementation**, not the new default or a published
-appliance. The six-VM reference remains unchanged. No runtime image or new
-repository has been published. Initial creation requires `./lab up --build`;
+appliance. The six-VM reference remains unchanged. Source is public; runtime
+images are not distributed. Initial creation requires `./lab up --build`;
 subsequent `./lab up` reuses that VM's local candidate without rebuilding
 application binaries. This does not imply reviewed release images exist.
+
+For a step-by-step introduction with expected results and recovery guidance,
+start with the [hands-on guide](hands-on.md). This document provides the detailed
+setup/reference material and dated validation history.
 
 The [prebuilt/development workflow](prebuilt-development.md) describes the
 implemented digest-pinned release loader, on-demand builder and CI boundaries.

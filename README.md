@@ -12,6 +12,11 @@ Start with the [glossary](docs/glossary.md) for terminology and the
 [feature status table](docs/feature-status.md) for implemented, partial and
 missing capabilities, with verification evidence tracked separately.
 
+To try the basic features yourself, follow the [hands-on guide](docs/hands-on.md):
+check readiness, send UE traffic, run one call, compare MUP and UPF paths, then
+optionally test recovery and edit/rebuild/roll back the dashboard. It uses the
+single-VM configuration, not the six-VM reference commands below.
+
 For a single-VM setup with component-level customization, start with the
 [compact setup guide](docs/compact-lab.md) and
 [prebuilt/development workflow](docs/prebuilt-development.md).

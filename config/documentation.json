@@ -2,11 +2,18 @@
   "version": 1,
   "translations": [
     {
+      "source": "docs/hands-on.md",
+      "translation": "docs/hands-on.ja.md",
+      "kind": "markdown",
+      "source_sha256": "3f0b2abc791c2147ddc3709d2cee1aeb808acfd955e1c10217a1fbf09c60d290",
+      "translation_sha256": "cebb41c15988a04d5d70628cff6e6fb3e973fc125b97a9be7d3f38fccb7c2d51"
+    },
+    {
       "source": "docs/prebuilt-development.md",
       "translation": "docs/prebuilt-development.ja.md",
       "kind": "markdown",
-      "source_sha256": "7802160514b66e80da8506d60ec615246d4a0bb016a73cd22d02533e64577211",
-      "translation_sha256": "e816c00105558e09524d7ef2542327b803817e48ea095c0b13db0052987b8195"
+      "source_sha256": "0998745636ba628c80b3e6ace453f78067d60402012502f37f454774d81be0fb",
+      "translation_sha256": "d7c105bceaaba83f1c90b9100ee0fb9dc3fcd7a2541ed9e82c860738540235da"
     },
     {
       "source": "docs/database-migration.md",
@@ -26,8 +33,8 @@
       "source": "docs/compact-lab.md",
       "translation": "docs/compact-lab.ja.md",
       "kind": "markdown",
-      "source_sha256": "8c57cfb508194c494c643f9ac37068485e7e272fe388b1da43b89f675619f52e",
-      "translation_sha256": "33a282171edc001b93dfa6ec5affcd6fd65d2e2d1663a6c098ec01333957fdfb"
+      "source_sha256": "524368ead03cc51fa9249f8fb3d3e7cb6253df13629f35aa39fb8597e2a56c1c",
+      "translation_sha256": "c42efe26e01def0a1e2c84be27e9a22342092646e3627a1c37d9fd0e8374d96c"
     },
     {
       "source": ".github/PULL_REQUEST_TEMPLATE.md",
@@ -47,8 +54,8 @@
       "source": "README.md",
       "translation": "README.ja.md",
       "kind": "markdown",
-      "source_sha256": "6a683a057f89dc891dc4f60f4685e12a2891934834d08bd88f5f7b248ee175fb",
-      "translation_sha256": "51340fcdefcf0288882354392e6b56b0d09476fa09a1ea9fd394cdb8bcea25e4"
+      "source_sha256": "d39891d96ac3f8b3f990de18166f31a66cfb71988236a6753003fecff65a35cf",
+      "translation_sha256": "5caa3bf4aeef77ded134d4c6080525e0666a17d5a0069360b6f25fa7b5436c61"
     },
     {
       "source": "SECURITY.md",
