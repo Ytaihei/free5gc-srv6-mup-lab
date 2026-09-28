@@ -8,6 +8,9 @@ Use the same single VM, Compose topology, configuration, dashboard and tests
 for both ordinary use and development. Development does not create another
 network. See the [compact setup guide](compact-lab.md) for host requirements.
 
+For a guided exercise using the currently available source-build path, including
+a visible dashboard change and rollback, use the [hands-on guide](hands-on.md).
+
 | Purpose | Image acquisition | Builder |
 | --- | --- | --- |
 | Start a released lab | Pull the pinned common runtime and eleven NF images | Not downloaded |

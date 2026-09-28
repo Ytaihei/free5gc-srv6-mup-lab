@@ -1,6 +1,8 @@
 {
   "version": 1,
   "files": [
+    "docs/hands-on.md",
+    "docs/hands-on.ja.md",
     "scripts/image_sources.py",
     "tests/test_image_sources.py",
     "scripts/image_source_layers.py",
