@@ -1,0 +1,35 @@
+name: 不具合報告（日本語）
+description: ラボの自動化または実装で再現できる不具合を報告します
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 秘密鍵、トークン、Tailnet固有設定、ラボ外の加入者情報を含めないでください。
+  - type: input
+    id: revision
+    attributes:
+      label: コミット
+      description: 試験に使った正確なGitコミットを指定してください
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 環境
+      description: ホストOS、アーキテクチャ、カーネル、libvirt、Docker、Ansibleのバージョン
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 再現手順
+      description: 問題を再現できる最小限のコマンド
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: 期待する結果と実際の結果
+    validations:
+      required: true

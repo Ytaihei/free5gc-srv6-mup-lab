@@ -1,0 +1,75 @@
+lab_config: "{{ lookup('ansible.builtin.file', lab_config_file) | from_yaml }}"
+
+lab_repo_local: >-
+  {{ lookup('ansible.builtin.env', 'LAB_REPO_LOCAL')
+     | default(playbook_dir | dirname, true) }}
+host_networks:
+  core:
+    - {interface: enp2s0, addresses: ["{{ lab_config.networks.n2.amf_ipv4 }}/{{ lab_config.networks.n2.subnet.split('/')[1] }}"], externally_owned: true}
+    - {interface: enp3s0, addresses: ["{{ lab_config.networks.n3_core.upf_ipv4 }}/{{ lab_config.networks.n3_core.subnet.split('/')[1] }}"], externally_owned: true}
+    - {interface: enp4s0, addresses: ["{{ lab_config.networks.n6.upf_ipv4 }}/{{ lab_config.networks.n6.subnet.split('/')[1] }}"], externally_owned: true}
+  ran:
+    - {interface: enp2s0, addresses: ["{{ lab_config.networks.n2.gnb_ipv4 }}/{{ lab_config.networks.n2.subnet.split('/')[1] }}"]}
+    - interface: enp3s0
+      addresses: ["{{ lab_config.networks.n3_access.gnb_ipv4 }}/{{ lab_config.networks.n3_access.subnet.split('/')[1] }}"]
+      routes:
+        - {to: "{{ lab_config.networks.n3_core.upf_ipv4 }}/32", via: "{{ lab_config.networks.n3_access.tpe_ipv4 }}"}
+  tpe:
+    - {interface: enp2s0, addresses: ["{{ lab_config.networks.n3_access.tpe_ipv4 }}/{{ lab_config.networks.n3_access.subnet.split('/')[1] }}"]}
+    - interface: enp3s0
+      addresses: ["{{ lab_config.networks.sr_underlay.tpe_ipv6 }}/{{ lab_config.networks.sr_underlay.subnet.split('/')[1] }}"]
+      routes:
+        - {to: "{{ lab_config.networks.sr_underlay.npe_locator }}", via: "{{ lab_config.networks.sr_underlay.npe_ipv6 }}"}
+    # This NIC may occupy a different PCI slot when added to an older lab VM.
+    # Match its reconciler-owned MAC and give it a stable in-guest name.
+    - {interface: n3b0, match_mac: "{{ lab_config.nodes.tpe.n3_core_mac }}", addresses: ["{{ lab_config.networks.n3_core.tpe_ipv4 }}/{{ lab_config.networks.n3_core.subnet.split('/')[1] }}"]}
+  npe:
+    - interface: enp2s0
+      addresses: ["{{ lab_config.networks.sr_underlay.npe_ipv6 }}/{{ lab_config.networks.sr_underlay.subnet.split('/')[1] }}"]
+      routes:
+        - {to: "{{ lab_config.networks.sr_underlay.tpe_locator }}", via: "{{ lab_config.networks.sr_underlay.tpe_ipv6 }}"}
+    - interface: enp3s0
+      addresses: ["{{ lab_config.networks.n6.npe_ipv4 }}/{{ lab_config.networks.n6.subnet.split('/')[1] }}"]
+      routes:
+        - {to: "{{ lab_config.networks.n6.subnet }}", scope: link, table: 100}
+        - {to: "{{ lab_config.networks.ue.pool }}", via: "{{ lab_config.networks.n6.upf_ipv4 }}", table: 100, on_link: true}
+  mupc: []
+  dn:
+    - interface: enp2s0
+      addresses: ["{{ lab_config.networks.n6.dn_ipv4 }}/{{ lab_config.networks.n6.subnet.split('/')[1] }}"]
+      routes:
+        - {to: "{{ lab_config.networks.ue.pool }}", via: "{{ lab_config.networks.n6.npe_ipv4 }}"}
+
+# Retained VPP role only. Active controller: go.mod (4.9.0); Vinbero PE:
+# third_party/vinbero compatibility patch (4.8.0). See research-scope.md.
+gobgp_version: '4.8.0'
+vpp_version: '26.06-release'
+go_version: '1.26.8'
+go_linux_amd64_sha256: 'd0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b'
+vinbero_version: 'v0.1.1'
+vinbero_commit: '0d7ccf3c798fffa000ccee82e1fd8c9d86525099'
+free5gc_compose_version: 'v4.2.3'
+free5gc_compose_commit: 'e4e2acebad6d6a8c49cfb03a97d9a09dd40c55c7'
+gtp5g_version: 'v0.9.5'
+gtp5g_commit: '973d001b25832c5a8e8d34f6381eb0c705fb523d'
+ueransim_version: 'v3.3.0'
+ueransim_commit: '6bf5a1a96aaef6ae8778b9d8b477ac6e2bbf8156'
+vinbero_device_mode: driver
+
+container_images:
+  free5gc_upf: free5gc/upf@sha256:94d0bc51a12e8760e2c68ffda3664211fb7600038a5f51effe024e5761fa3175
+  free5gc_nrf: free5gc/nrf@sha256:28066e3d3267081d85a2f4f151e2167523740584c2fcae93dd61701945d86a02
+  free5gc_amf: free5gc/amf@sha256:1b0a89000cd88bc1bc9fbf6ee610c3e2fe92028e2276b25a716f1de9a39d2654
+  free5gc_ausf: free5gc/ausf@sha256:9c73a8b515f0790aa54a59da1e2b34d78104d903cac6ac657f695ca503326627
+  free5gc_nssf: free5gc/nssf@sha256:69e51bd7750e68d76d553ba851267e280fd7d300b30b83afd80c1c083d29774c
+  free5gc_pcf: free5gc/pcf@sha256:36ee40e08e7ebb738d05d45e35617e739cb8e790a45c6a693fffa59c7561f4d2
+  free5gc_smf: free5gc/smf@sha256:d3143f9956a58ab0699715fd5108d9a1de6af0d4df7e06e298dabee6f6903542
+  free5gc_udm: free5gc/udm@sha256:c05366e644c1fcc89a04e4b251159336fded2b336c2d372e9eef9bb1da5b530e
+  free5gc_udr: free5gc/udr@sha256:698c3b493dade8a45577d1b6cacdadb3720f45819588ac604f12ee9a006354e3
+  free5gc_webui: free5gc/webui@sha256:b927098dd9ebaa198a7be1194867c6810d683b0b5e8bbf42dfb77d1b2ce2ffd4
+  free5gc_chf: free5gc/chf@sha256:821d15fcff22cb10a15af8e06532227c85bd217bb9a2f28f23fffbd92a3c5252
+  free5gc_n3iwf: free5gc/n3iwf@sha256:61adc1684a73651cd1637fb4dbe64e501864bccdaad35a6dcc801e66a5830831
+  free5gc_tngf: free5gc/tngf@sha256:0bc344cc3e8d36b98366d660e86e1c6db431fb81c6d991912c230286e6c04e2e
+  free5gc_nef: free5gc/nef@sha256:fb4d9afee1fcd57310590ac7242eec8c3e6e87d8a83d7a794e2a7b7cb41c255c
+  free5gc_n3iwue: free5gc/n3iwue@sha256:6a36abd16abc7d880a379189d5347b526a2dbb8bb8e095d29a6867fbaf928865
+  mongo: mongo@sha256:4be76f674fc4b27859816811b8baa3c51830eb1dbf4ca81a51e26b79edd662ef

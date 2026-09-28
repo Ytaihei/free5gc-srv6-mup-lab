@@ -1,0 +1,18 @@
+schema_version: 1
+vm:
+  name: srv6-mup-compact
+  user: labadmin
+  memory_mib: 8192
+  vcpus: 4
+  disk_gib: 80
+  image_directory: /var/lib/libvirt/images/srv6-mup
+  network: srv6-mup-compact-mgmt
+  bridge: virbr-mupc
+  subnet: 192.168.125.0/24
+  gateway: 192.168.125.1
+  address: 192.168.125.10
+  mac: '52:54:00:5c:05:10'
+dashboard_port: 8788
+# Logical settings inherit the reviewed lab.example.yml, never lab.local.yml.
+# Only these groups may be overridden; secrets must remain in compact.local.yml.
+lab: {}

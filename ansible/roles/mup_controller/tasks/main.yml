@@ -1,0 +1,61 @@
+---
+- name: Stop and disable the obsolete GoBGP sidecar
+  ansible.builtin.command: systemctl disable --now gobgpd.service
+  register: controller_gobgp_stop
+  changed_when: "'Removed' in controller_gobgp_stop.stdout"
+  failed_when: false
+
+- name: Create MUP controller service account
+  ansible.builtin.user:
+    name: mup
+    system: true
+    home: /var/lib/mup-controller
+    shell: /usr/sbin/nologin
+
+- name: Create MUP controller directories
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: directory
+    owner: '{{ item.owner }}'
+    group: '{{ item.group }}'
+    mode: '{{ item.mode }}'
+  loop:
+    - {path: /etc/srv6-mup, owner: root, group: mup, mode: '0750'}
+    - {path: /var/lib/mup-controller, owner: mup, group: mup, mode: '0750'}
+
+- name: Install PFCP-to-MUP policy configuration
+  ansible.builtin.template:
+    src: '{{ lab_repo_local }}/ansible/templates/mup-config.yml.j2'
+    dest: /etc/srv6-mup/config.yml
+    owner: root
+    group: mup
+    mode: '0640'
+  notify: Restart MUP controller
+
+- name: Install MUP controller service
+  ansible.builtin.copy:
+    src: '{{ lab_repo_local }}/configs/systemd/mup-controller.service'
+    dest: /etc/systemd/system/mup-controller.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart MUP controller
+
+- name: Enable and start MUP controller
+  ansible.builtin.systemd_service:
+    name: mup-controller
+    enabled: true
+    state: "{{ 'restarted' if (mup_binaries_changed | default(false)) else 'started' }}"
+    daemon_reload: true
+
+- name: Flush controller handlers before validation
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify controller health endpoint
+  ansible.builtin.uri:
+    url: http://{{ lab_config.nodes.mupc.management_ipv4 }}:9443/healthz
+    status_code: 204
+  register: mup_health
+  retries: 10
+  delay: 2
+  until: mup_health.status == 204

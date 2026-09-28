@@ -1,0 +1,19 @@
+---
+- name: Restart Vinbero
+  ansible.builtin.systemd_service:
+    name: vinbero
+    state: restarted
+    daemon_reload: true
+  notify: Restart Vinbero bootstrap
+
+- name: Restart Vinbero bootstrap
+  ansible.builtin.systemd_service:
+    name: vinbero-bootstrap
+    state: restarted
+    daemon_reload: true
+
+- name: Restart MUP PE (N6/Direct side) neighbor timer
+  ansible.builtin.systemd_service:
+    name: vinbero-neighbor-refresh.timer
+    state: restarted
+    daemon_reload: true

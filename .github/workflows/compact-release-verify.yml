@@ -1,0 +1,32 @@
+name: Verify published compact image identities
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Verify runtime images or the separately reviewed builder
+        type: choice
+        options: [runtime, builder]
+        default: runtime
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install PyYAML==6.0.3
+      - name: Anonymous digest/platform verification; no container execution
+        env:
+          RELEASE_SCOPE: ${{ inputs.scope }}
+        run: |
+          export DOCKER_CONFIG=$(mktemp -d)
+          python3 scripts/compact_release.py --pull "$RELEASE_SCOPE"

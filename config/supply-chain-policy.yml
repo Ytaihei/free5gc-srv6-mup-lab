@@ -1,0 +1,26 @@
+schema_version: 1
+fail_severities: [HIGH, CRITICAL]
+# Package license identifiers only. This is a source-only engineering gate,
+# not permission to redistribute third-party binaries or images.
+allowed_package_licenses:
+  - Apache-2.0
+  - BSD-2-Clause
+  - BSD-3-Clause
+  - ISC
+  - MIT
+  - MPL-2.0
+  - Python-2.0
+  - PSF-2.0
+license_exceptions:
+  - name: ansible-core
+    version: 2.21.3
+    licenses: [GPL-3.0-or-later]
+    reason: Host-side provisioning tool only; not linked into or vendored with lab tools.
+# No blanket CVE exceptions: findings must be resolved or reviewed explicitly.
+license_metadata:
+  # Exact version overrides for metadata missing from requirements.txt scans.
+  # Review these against upstream again when bumping the pinned version.
+  - {name: ansible-core, version: 2.21.3, licenses: [GPL-3.0-or-later], source: 'https://pypi.org/pypi/ansible-core/2.21.3/json'}
+  - {name: Jinja2, version: 3.1.6, licenses: [BSD-3-Clause], source: 'https://github.com/pallets/jinja/blob/3.1.6/LICENSE.txt'}
+  - {name: PyYAML, version: 6.0.3, licenses: [MIT], source: 'https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE'}
+  - {name: stdlib, version: v1.26.8, licenses: [BSD-3-Clause], source: 'https://github.com/golang/go/blob/go1.26.8/LICENSE'}

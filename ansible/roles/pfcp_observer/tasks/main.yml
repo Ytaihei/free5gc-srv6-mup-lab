@@ -1,0 +1,85 @@
+---
+- name: Create passive observer service account
+  ansible.builtin.user:
+    name: mup-observer
+    system: true
+    home: /nonexistent
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Create observer configuration directory
+  ansible.builtin.file:
+    path: /etc/srv6-mup
+    state: directory
+    owner: root
+    group: mup-observer
+    mode: '0750'
+
+- name: Install PFCP-to-MUP policy configuration
+  ansible.builtin.template:
+    src: '{{ lab_repo_local }}/ansible/templates/mup-config.yml.j2'
+    dest: /etc/srv6-mup/config.yml
+    owner: root
+    group: mup-observer
+    mode: '0640'
+  notify: Restart PFCP observer
+
+- name: Install passive PFCP observer service
+  ansible.builtin.copy:
+    src: '{{ lab_repo_local }}/configs/systemd/pfcp-observer.service'
+    dest: /etc/systemd/system/pfcp-observer.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart PFCP observer
+
+- name: Verify the deterministic free5GC bridge exists
+  ansible.builtin.command: ip link show br-free5gc
+  changed_when: false
+
+- name: Enable and start passive PFCP observer
+  ansible.builtin.systemd_service:
+    name: pfcp-observer
+    enabled: true
+    state: "{{ 'restarted' if (mup_binaries_changed | default(false)) else 'started' }}"
+    daemon_reload: true
+  register: observer_service_start
+
+- name: Flush observer handlers before validation
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify passive PFCP observer is active
+  ansible.builtin.command: systemctl is-active pfcp-observer
+  register: pfcp_observer_active
+  retries: 10
+  delay: 2
+  until: pfcp_observer_active.stdout == 'active'
+  changed_when: false
+
+# UERANSIM's gNB does not reconnect its SCTP association after an AMF restart.
+# Reconnect only after the passive observer is ready, otherwise the new PFCP
+# establishment can occur before capture starts and the MUP state is lost.
+# The passive observer also loses its reconstructed state when updated; a new
+# registration is necessary even when the AMF itself did not restart.
+- name: Determine whether fresh PFCP establishment is required
+  ansible.builtin.set_fact:
+    ran_reconnect_required: >-
+      {{ (free5gc_restarted | default(false) | bool) or
+         (observer_restarted | default(false) | bool) or
+         (observer_service_start.changed | default(false) | bool) }}
+
+- name: Discover existing RAN services before recovery
+  ansible.builtin.service_facts:
+  delegate_to: "{{ groups['ran'] | first }}"
+  register: ran_services
+  when: ran_reconnect_required
+
+- name: Reconnect RAN and UE after a free5GC restart
+  ansible.builtin.systemd_service:
+    name: '{{ item }}'
+    state: restarted
+  loop: [ueransim-gnb, ueransim-ue]
+  delegate_to: "{{ groups['ran'] | first }}"
+  when:
+    - ran_reconnect_required
+    - "item + '.service' in ran_services.ansible_facts.services"

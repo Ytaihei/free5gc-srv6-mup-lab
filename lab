@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == deps ]]; then
+  shift
+  exec bash "$(dirname "$(readlink -f "$0")")/scripts/compact-deps.sh" "$@"
+fi
+if ! python3 -c 'import yaml, jinja2' >/dev/null 2>&1; then
+  echo 'Missing Python YAML/Jinja2 dependencies. Run ./lab deps for the installation plan.' >&2
+  exit 1
+fi
+exec python3 "$(dirname "$(readlink -f "$0")")/scripts/compact_lab.py" "$@"

@@ -1,0 +1,29 @@
+supi: '{{ lab_config.subscriber.supi }}'
+mcc: '{{ lab_config.subscriber.mcc }}'
+mnc: '{{ lab_config.subscriber.mnc }}'
+key: '{{ lab_config.subscriber.key }}'
+op: '{{ lab_config.subscriber.opc }}'
+opType: 'OPC'
+amf: '{{ lab_config.subscriber.amf }}'
+imei: '{{ lab_config.subscriber.imei }}'
+imeiSv: '{{ lab_config.subscriber.imei_sv }}'
+gnbSearchList: [127.0.0.1]
+uacAic: {mps: false, mcs: false}
+uacAcc:
+  normalClass: 0
+  class11: false
+  class12: false
+  class13: false
+  class14: false
+  class15: false
+sessions:
+  - type: IPv4
+    apn: {{ lab_config.subscriber.dnn }}
+    slice: {sst: {{ lab_config.subscriber.sst }}, sd: 0x{{ lab_config.subscriber.sd }}}
+configured-nssai:
+  - {sst: {{ lab_config.subscriber.sst }}, sd: 0x{{ lab_config.subscriber.sd }}}
+default-nssai:
+  - {sst: {{ lab_config.subscriber.sst }}, sd: 0x{{ lab_config.subscriber.sd }}}
+integrity: {IA1: true, IA2: true, IA3: true}
+ciphering: {EA1: true, EA2: true, EA3: true}
+integrityMaxRate: {uplink: full, downlink: full}

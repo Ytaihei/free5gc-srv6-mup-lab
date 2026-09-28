@@ -1,0 +1,69 @@
+---
+- name: Install UERANSIM dependencies
+  ansible.builtin.apt:
+    update_cache: true
+    name: [build-essential, cmake, git, libsctp-dev, lksctp-tools, make]
+    state: present
+
+- name: Check out pinned UERANSIM
+  ansible.builtin.git:
+    repo: https://github.com/aligungr/UERANSIM.git
+    dest: /opt/UERANSIM
+    version: '{{ ueransim_commit }}'
+    depth: 1
+    update: false
+  register: ueransim_source
+
+- name: Build UERANSIM
+  ansible.builtin.command: make -j2
+  args:
+    chdir: /opt/UERANSIM
+  when: ueransim_source.changed
+
+- name: Install gNB configuration
+  ansible.builtin.template:
+    src: gnb.yaml.j2
+    dest: /opt/UERANSIM/config/free5gc-gnb.yaml
+    mode: '0644'
+  notify: Restart UERANSIM
+
+- name: Install UE configuration
+  ansible.builtin.template:
+    src: ue.yaml.j2
+    dest: /opt/UERANSIM/config/free5gc-ue.yaml
+    mode: '0600'
+  notify: Restart UERANSIM
+
+- name: Load SCTP and TUN modules at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/ueransim.conf
+    mode: '0644'
+    content: |
+      sctp
+      tun
+
+- name: Load UERANSIM kernel modules now
+  ansible.builtin.command: modprobe {{ item }}
+  loop: [sctp, tun]
+  changed_when: false
+
+- name: Install UERANSIM systemd services
+  ansible.builtin.template:
+    src: '{{ item }}.service.j2'
+    dest: '/etc/systemd/system/{{ item }}.service'
+    mode: '0644'
+  loop: [ueransim-gnb, ueransim-ue]
+  register: ueransim_units
+  notify: Restart UERANSIM
+
+- name: Reload systemd for UERANSIM
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: ueransim_units.changed
+
+- name: Enable and start UERANSIM
+  ansible.builtin.systemd_service:
+    name: '{{ item }}'
+    enabled: true
+    state: started
+  loop: [ueransim-gnb, ueransim-ue]

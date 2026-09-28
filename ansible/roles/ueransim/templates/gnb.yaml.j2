@@ -1,0 +1,15 @@
+mcc: '{{ lab_config.subscriber.mcc }}'
+mnc: '{{ lab_config.subscriber.mnc }}'
+nci: '0x000000010'
+idLength: 32
+tac: 1
+linkIp: 127.0.0.1
+ngapIp: {{ lab_config.networks.n2.gnb_ipv4 }}
+gtpIp: {{ lab_config.networks.n3_access.gnb_ipv4 }}
+amfConfigs:
+  - address: {{ lab_config.networks.n2.amf_ipv4 }}
+    port: 38412
+slices:
+  - sst: {{ lab_config.subscriber.sst }}
+    sd: 0x{{ lab_config.subscriber.sd }}
+ignoreStreamIds: true

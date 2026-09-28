@@ -1,0 +1,11 @@
+---
+- name: Restart PFCP observer
+  ansible.builtin.systemd_service:
+    name: pfcp-observer
+    state: restarted
+    daemon_reload: true
+
+- name: Record observer restart for PFCP state recovery
+  ansible.builtin.set_fact:
+    observer_restarted: true
+  listen: Restart PFCP observer

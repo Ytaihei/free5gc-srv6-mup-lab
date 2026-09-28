@@ -1,0 +1,128 @@
+schema_version: 1
+compact:
+  status: local-development-candidate-not-for-publication
+  runtime_base: ubuntu@sha256:a61567bd31828687156d735ea8eb01ba4e37636e225dd6a48ba94136a70d9d61
+  builder_linux_libc_dev: '6.8.0-142.142'
+  # Compact only. Legacy reference images below are deliberately unchanged.
+  database:
+    series: '8.0'
+    version: '8.0.32'
+    image: mongo@sha256:a70d9916fd916ddfdf6fd8552784c599eb26f88c59951c7bcdc50abd158e8be7
+    stages:
+      '5.0': mongo@sha256:9fe0747650162376edd9f67a0b8e48a43e920cca54f134be82e45ce46ae7fc8d
+      '6.0': mongo@sha256:268eb517abcb8a1bb4cf5f290ec2ac37185e78bfb62e7111576bbb3d8b092456
+      '7.0': mongo@sha256:609d76574151bee8b148caee83cd9fec8b5f695e5a6db9f1e0f9dced0673574e
+      '8.0': mongo@sha256:a70d9916fd916ddfdf6fd8552784c599eb26f88c59951c7bcdc50abd158e8be7
+last_reviewed: '2026-09-10'
+
+toolchains:
+  yarn:
+    version: 4.1.0
+    url: https://repo.yarnpkg.com/4.1.0/packages/yarnpkg-cli/bin/yarn.js
+    sha256: 81a00df816059803e6b5148acf03ce313cad36b7f6e5af6efa040a15981a6ffb
+  node:
+    version: 22.23.2
+    url: https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz
+    sha256: d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
+  compose:
+    version: 5.5.1
+    url: https://github.com/docker/compose/releases/download/v5.5.1/docker-compose-linux-x86_64
+    sha256: db1889184726840f75c4f9c001048430d4f25b3be3cb084d3ddd762bc0aed576
+  go:
+    version: 1.26.8
+    platform: linux-amd64
+    url: https://go.dev/dl/go1.26.8.linux-amd64.tar.gz
+    sha256: d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b
+  codegen:
+    buf: 1.60.0
+    protoc_gen_go: 1.36.11
+    protoc_gen_connect_go: 1.19.1
+
+sources:
+  free5gc:
+    version: v4.2.3
+    commit: 3b34a08e93a9b334f0f4005d3a3a9f79b66d59b9
+    repository: https://github.com/free5gc/free5gc.git
+    license: Apache-2.0
+  vinbero:
+    version: v0.1.1
+    commit: 0d7ccf3c798fffa000ccee82e1fd8c9d86525099
+    repository: https://github.com/takehaya/Vinbero.git
+    license: Apache-2.0
+  free5gc_compose:
+    version: v4.2.3
+    commit: e4e2acebad6d6a8c49cfb03a97d9a09dd40c55c7
+    repository: https://github.com/free5gc/free5gc-compose.git
+    license: Apache-2.0
+  gtp5g:
+    version: v0.9.5
+    commit: 973d001b25832c5a8e8d34f6381eb0c705fb523d
+    repository: https://github.com/free5gc/gtp5g.git
+    license: GPL-2.0
+  ueransim:
+    version: v3.3.0
+    commit: 6bf5a1a96aaef6ae8778b9d8b477ac6e2bbf8156
+    repository: https://github.com/aligungr/UERANSIM.git
+    license: AGPL-3.0
+
+# Gitlinks in free5gc v4.2.3, not floating NF branches or image tags.
+compact_nf_sources:
+  amf: {repository: 'https://github.com/free5gc/amf.git', commit: 2962b9fdbdff1fb04de906063438e7acce761ce4}
+  ausf: {repository: 'https://github.com/free5gc/ausf.git', commit: b74ee7dafec5975e3440ae95125994565cfb0496}
+  chf: {repository: 'https://github.com/free5gc/chf.git', commit: 3564da89afc476f2414c66aa34d9df1574b95449}
+  nrf: {repository: 'https://github.com/free5gc/nrf.git', commit: 8e567d4c161c95dfb5765b5399b6b2086c64985a}
+  nssf: {repository: 'https://github.com/free5gc/nssf.git', commit: cb7305b08e19297447fb5765c9db6e046076b4c8}
+  pcf: {repository: 'https://github.com/free5gc/pcf.git', commit: 90d88f15fe18780bb6c4b2cf3bbd59d636dd130d}
+  smf: {repository: 'https://github.com/free5gc/smf.git', commit: 796a2de8cfedc208e6b709da9e8fe5a93026434e}
+  udm: {repository: 'https://github.com/free5gc/udm.git', commit: bdcc8bc316bb4e2a525233289d30f9945c844ea5}
+  udr: {repository: 'https://github.com/free5gc/udr.git', commit: b649f90d39a99007dcbf081fcb3479477e28b6eb}
+  upf: {repository: 'https://github.com/free5gc/go-upf.git', commit: 0012cebc4c3758882a89f6485d1d0d95ec3659c7}
+  webui: {repository: 'https://github.com/free5gc/webconsole.git', commit: ea04cadd91550fadd5c90939cd5fafe86c253b6c}
+
+cloud_images:
+  jammy:
+    serial: '20260829'
+    url: https://cloud-images.ubuntu.com/jammy/20260829/jammy-server-cloudimg-amd64.img
+    sha256: 46c966c646ab2e73af6ce8a2bdd20fefbc20f851794bbd46de31d2d1103b72c0
+  noble:
+    serial: '20260826'
+    url: https://cloud-images.ubuntu.com/releases/noble/release-20260826/ubuntu-24.04-server-cloudimg-amd64.img
+    sha256: d0fe84bb5f80853425fa6be28e2c106f30104c3cfe8611933f2e65c9b63f0e30
+
+containers:
+  status: digest-pinned
+  note: Digests were captured from the passing lab-core image set on 2026-09-02.
+  images:
+    free5gc_upf: free5gc/upf@sha256:94d0bc51a12e8760e2c68ffda3664211fb7600038a5f51effe024e5761fa3175
+    free5gc_nrf: free5gc/nrf@sha256:28066e3d3267081d85a2f4f151e2167523740584c2fcae93dd61701945d86a02
+    free5gc_amf: free5gc/amf@sha256:1b0a89000cd88bc1bc9fbf6ee610c3e2fe92028e2276b25a716f1de9a39d2654
+    free5gc_ausf: free5gc/ausf@sha256:9c73a8b515f0790aa54a59da1e2b34d78104d903cac6ac657f695ca503326627
+    free5gc_nssf: free5gc/nssf@sha256:69e51bd7750e68d76d553ba851267e280fd7d300b30b83afd80c1c083d29774c
+    free5gc_pcf: free5gc/pcf@sha256:36ee40e08e7ebb738d05d45e35617e739cb8e790a45c6a693fffa59c7561f4d2
+    free5gc_smf: free5gc/smf@sha256:d3143f9956a58ab0699715fd5108d9a1de6af0d4df7e06e298dabee6f6903542
+    free5gc_udm: free5gc/udm@sha256:c05366e644c1fcc89a04e4b251159336fded2b336c2d372e9eef9bb1da5b530e
+    free5gc_udr: free5gc/udr@sha256:698c3b493dade8a45577d1b6cacdadb3720f45819588ac604f12ee9a006354e3
+    free5gc_webui: free5gc/webui@sha256:b927098dd9ebaa198a7be1194867c6810d683b0b5e8bbf42dfb77d1b2ce2ffd4
+    free5gc_chf: free5gc/chf@sha256:821d15fcff22cb10a15af8e06532227c85bd217bb9a2f28f23fffbd92a3c5252
+    free5gc_n3iwf: free5gc/n3iwf@sha256:61adc1684a73651cd1637fb4dbe64e501864bccdaad35a6dcc801e66a5830831
+    free5gc_tngf: free5gc/tngf@sha256:0bc344cc3e8d36b98366d660e86e1c6db431fb81c6d991912c230286e6c04e2e
+    free5gc_nef: free5gc/nef@sha256:fb4d9afee1fcd57310590ac7242eec8c3e6e87d8a83d7a794e2a7b7cb41c255c
+    free5gc_n3iwue: free5gc/n3iwue@sha256:6a36abd16abc7d880a379189d5347b526a2dbb8bb8e095d29a6867fbaf928865
+    mongo: mongo@sha256:4be76f674fc4b27859816811b8baa3c51830eb1dbf4ca81a51e26b79edd662ef
+
+verification_tools:
+  shellcheck:
+    version: 0.11.0
+    url: https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+    sha256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+    member: shellcheck-v0.11.0/shellcheck
+  gitleaks:
+    version: 8.30.1
+    url: https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+    sha256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    member: gitleaks
+  trivy:
+    version: 0.74.0
+    url: https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz
+    sha256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+    member: trivy

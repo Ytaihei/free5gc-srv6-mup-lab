@@ -1,0 +1,49 @@
+---
+- name: Wait for newly created lab guests
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH connectivity
+      ansible.builtin.wait_for_connection:
+        timeout: 900
+        sleep: 5
+
+- name: Common lab baseline
+  hosts: all
+  become: true
+  roles: [common]
+
+- name: Vinbero SRv6 MUP packet edges
+  hosts: pe
+  become: true
+  roles: [vinbero_pe]
+
+- name: Build PFCP observer and MUP controller tools
+  hosts: core:controller
+  become: true
+  roles: [mup_binaries]
+
+- name: MUP controller
+  hosts: controller
+  become: true
+  roles: [mup_controller]
+
+- name: free5GC core and UPF
+  hosts: core
+  become: true
+  roles: [free5gc]
+
+- name: Passive PFCP observer
+  hosts: core
+  become: true
+  roles: [pfcp_observer]
+
+- name: Data-network test endpoint
+  hosts: dn
+  become: true
+  roles: [dn]
+
+- name: UERANSIM RAN and UE
+  hosts: ran
+  become: true
+  roles: [ueransim]

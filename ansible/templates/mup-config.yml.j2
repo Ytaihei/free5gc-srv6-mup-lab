@@ -1,0 +1,30 @@
+observer:
+  id: {{ lab_config.nodes.core.name }}
+  interface: br-free5gc
+  controller_url: http://{{ lab_config.nodes.mupc.management_ipv4 }}:9443
+  full_interval: {{ lab_config.mup.observer_interval }}
+
+controller:
+  listen: {{ lab_config.nodes.mupc.management_ipv4 }}:9443
+  observer_lease: {{ lab_config.mup.observer_lease }}
+  local_asn: {{ lab_config.mup.local_asn }}
+  router_id: {{ lab_config.nodes.mupc.management_ipv4 }}
+  bgp_listen_port: {{ lab_config.mup.bgp_port }}
+  next_hop: {{ lab_config.nodes.mupc.management_ipv4 }}
+  peers:
+    - {address: {{ lab_config.nodes.tpe.management_ipv4 }}, asn: {{ lab_config.mup.local_asn }}}
+    - {address: {{ lab_config.nodes.npe.management_ipv4 }}, asn: {{ lab_config.mup.local_asn }}}
+
+mup:
+  session_rd: "{{ lab_config.mup.session_rd }}"
+  t1_route_target: "{{ lab_config.mup.t1_route_target }}"
+  t2_route_target: "{{ lab_config.mup.t2_route_target }}"
+  direct_segment_asn: {{ lab_config.mup.direct_segment_asn }}
+  direct_segment_id: {{ lab_config.mup.direct_segment_id }}
+  teid_prefix_length: {{ lab_config.mup.teid_prefix_length }}
+
+policy:
+  - name: internet-lab-pool
+    dnn: {{ lab_config.subscriber.dnn }}
+    ue_prefix: {{ lab_config.networks.ue.pool }}
+    action: direct

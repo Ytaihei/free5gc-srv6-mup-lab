@@ -1,0 +1,21 @@
+[Unit]
+Description=Vinbero eBPF SRv6 MUP data plane
+Wants=network-online.target
+After=network-online.target
+Before=vinbero-bootstrap.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/vinberod --bgp-enabled -c /etc/vinbero/vinbero.yml
+Restart=on-failure
+RestartSec=3
+LimitMEMLOCK=infinity
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_BPF CAP_SYS_ADMIN CAP_SYS_RESOURCE CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_BPF CAP_SYS_ADMIN CAP_SYS_RESOURCE CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

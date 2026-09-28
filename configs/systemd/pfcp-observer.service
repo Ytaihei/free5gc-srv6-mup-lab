@@ -1,0 +1,26 @@
+[Unit]
+Description=Passive PFCP session observer for SRv6 MUP
+Wants=network-online.target
+After=network-online.target docker.service free5gc-lab.service
+Requires=free5gc-lab.service
+
+[Service]
+Type=simple
+User=mup-observer
+Group=mup-observer
+ExecStartPre=/usr/bin/test -d /sys/class/net/br-free5gc
+ExecStart=/usr/local/bin/pfcp-observer --config /etc/srv6-mup/config.yml
+Restart=on-failure
+RestartSec=3
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+
+[Install]
+WantedBy=multi-user.target

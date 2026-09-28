@@ -1,0 +1,51 @@
+network:
+  version: 2
+  ethernets:
+    enp1s0:
+      dhcp4: true
+{% for nic in host_networks[lab_role] %}
+    {{ nic.interface }}:
+{% if nic.match_mac is defined %}
+      match:
+        macaddress: '{{ nic.match_mac }}'
+      set-name: {{ nic.interface }}
+{% endif %}
+      dhcp4: false
+      dhcp6: false
+      optional: true
+{% if not (nic.externally_owned | default(false)) %}
+      addresses:
+{% for address in nic.addresses %}
+        - {{ address }}
+{% endfor %}
+{% if nic.routes is defined %}
+      routes:
+{% for route in nic.routes %}
+        - to: {{ route.to }}
+{% if route.via is defined %}
+          via: {{ route.via }}
+{% endif %}
+{% if route.scope is defined %}
+          scope: {{ route.scope }}
+{% endif %}
+{% if route.on_link | default(false) %}
+          on-link: true
+{% endif %}
+{% if route.table is defined %}
+          table: {{ route.table }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}
+{% endfor %}
+{% if lab_role == 'npe' %}
+    lo:
+      addresses: ["{{ lab_config.mup.npe_dsd_address }}/32"]
+  vrfs:
+    mup-dn:
+      table: 100
+      interfaces: [enp3s0]
+      # The address lives on enp3s0, not the VRF master. Do not wait for
+      # the addressless master to reach the "degraded" address-ready state.
+      optional: true
+{% endif %}

@@ -1,0 +1,55 @@
+# 品質とサプライチェーンの検査
+
+[English](supply-chain.md) | 日本語
+
+## ローカルでの実行
+
+```bash
+make check
+make lint
+make supply-chain
+./scripts/verification-tool.sh gitleaks git --redact --config .gitleaks.toml --log-opts='--all' .
+```
+
+スキャナーは指定された上流リリースから取得し、呼び出しのたびにアーカイブのSHA-256を検証します。rootへのインストールやリモートシェルインストーラーは使いません。GitHub Actionsの依存はコミットSHAで固定します。秘密情報検査は固定Gitleaksを直接使い、スキャナーにGitHubトークンを渡す必要はありません。
+
+## 対象と失敗条件
+
+PRとmain/masterへのpushで、単体/構文/vet、ShellCheck、全履歴の秘密情報検査、サプライチェーン検査を実行します。サプライチェーン検査の対象は次です。
+
+1. 間接依存を含む `go.mod` と固定した `requirements-dev.txt`。
+2. 新しくビルドしたMUP-C、observer、mupctl、dashboardと、埋め込まれたGo標準ライブラリー。
+3. 依存ライセンス識別子。TrivyがrequirementsやGoバイナリから抽出できない場合は、版ごとの補足メタデータを使用。
+
+修正版未公開を含むHIGH/CRITICAL CVE、未知・未レビューのライセンス、空のパッケージ検査でCIを失敗させます。包括的なCVE抑止はありません。`config/supply-chain-policy.yml` に、確認した識別子と補足メタデータの上流リンクを記録します。これは**ソースのみの配布**に対する技術的検査であり、法的判断や第三者バイナリ配布の承認ではありません。
+
+コンテナイメージでは別の分類ポリシーと資料確認表を使います。[イメージ配布レビュー](image-distribution.ja.md)を参照してください。そこでのGPL/LGPLの分類は対応ソースの確認要件を示し、一律の禁止や承認ではありません。
+
+バイナリのライセンス照合では、ソース一覧の同じパッケージ名**とバージョン**を使います。生JSONと、CycloneDX SBOM向けにライセンスを補ったJSONは別に保持し、元の脆弱性を削除しません。結果は管理対象外の `artifacts/supply-chain/` に保存します。CIは失敗時もJSONだけを14日間保存し、実行ファイルはアップロードしません。
+
+このジョブはPythonの推移的依存環境をインストールしません。ゲストOSパッケージ、パッチ済みVinberoツリー、gtp5g/UERANSIMバイナリ、cloud disk、ダイジェスト固定のfree5GC/Mongoコンテナー内部は検査対象外です。これらはバイナリ/イメージ配布前に別途検査が必要です。ロックとTHIRD_PARTY_NOTICESは一覧であって検査の代わりではなく、ソースCI成功はラボ全体にCVEがないことを意味しません。
+
+ワークフローは週次実行とDependabot更新を宣言していますが、サービス有効化と必須チェックのブランチ規則は各リポジトリ所有者が設定します。YAMLを置くだけではリポジトリ設定は成立しません。
+
+## 2026-09-05の対応
+
+導入した検査でGo 1.25.5、`x/net` 0.55.0、`x/text` 0.37.0、gRPC 1.82.1のHIGH情報を検出しました。Goは同じminor系列のチェックサム固定1.25.14へ、各モジュールは0.56.0、0.39.0、1.83.1へ更新し、依存グラフを `go.sum` に記録しました。その後、ソースと新しくビルドした4ツールはHIGH/CRITICALとライセンスの検査に成功しました。結果は検査日とDBに依存するため、定期的に再実行してください。
+
+## 上流資料
+
+Go 1.26.8/PFCP 1.1.2更新とGoBGP 4.9/4.8相互接続の検査は[検証サマリー](validation-summary.ja.md)を参照してください。
+
+- [Trivy filesystem CLIとオプション](https://trivy.dev/docs/v0.74/guide/references/configuration/cli/trivy_filesystem/)
+- [Trivyライセンススキャナー](https://www.trivy.dev/docs/latest/scanner/license/)
+- [Trivy 0.74.0リリース](https://github.com/aquasecurity/trivy/releases/tag/v0.74.0)
+- [Goリリース情報とアーカイブチェックサム](https://go.dev/dl/?mode=json&include=all)
+
+## 2026-09-09のマージ前再検査
+
+更新DBがgRPC 1.83.1を、モジュール一覧とビルド済みMUP-Cの両方でHIGH CVE-2026-84445（GHSA-2v4p-qf9q-27wj、2026-09-08 UTC公開）として拒否しました。検査を迂回せず、同系列の修正版1.83.2へ進め、必要なグラフを `go.mod` / `go.sum` で解決しました。[上流情報](https://github.com/advisories/GHSA-2v4p-qf9q-27wj)と[リリースノート](https://github.com/grpc/grpc-go/releases/tag/v1.83.2)を参照してください。
+
+対象はauthorityヘッダーが両方ない要求に対するgRPC-Go xDSサーバーの処理です。パッケージ/バイナリで検出されたことだけでは、このラボのプロセス内GoBGP経由で悪用可能とは証明できません。ソース依存の更新は稼働中ゲストのバイナリを置き換えません。依存検査とクリーンOSからの完全な転送検証は別の証拠です。
+
+## 公開範囲
+
+[ソース配布手順](source-distribution.ja.md)でローカルの履歴なし候補を作ります。厳密な許可リストはホスト運用、無効な旧実装、非公開の開発記録、実行時成果物を除外します。作業ディレクトリだけでなく、展開した候補を確認してください。秘密情報パターン検査だけではプライバシー/ライセンス監査にならず、公開承認や実行時検査範囲の拡張も意味しません。

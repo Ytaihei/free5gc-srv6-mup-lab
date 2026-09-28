@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "reviewed": "2026-09-21",
+  "note": "Provenance only, never a secret-scanner exemption or approval to use shared keys for authentication.",
+  "upstreams": {
+    "free5gc": "https://raw.githubusercontent.com/free5gc/free5gc-compose/e4e2acebad6d6a8c49cfb03a97d9a09dd40c55c7/cert/",
+    "go": "https://raw.githubusercontent.com/golang/go/go1.26.8/src/crypto/x509/"
+  },
+  "keys": [
+    {"path": "/free5gc/cert/nrf.key", "sha256": "df095067d859b62d19d1d0d9776beff45625320118d6319f573ee033aac56c3b", "upstream": "free5gc", "file": "nrf.key", "classification": "public-upstream-default-key"},
+    {"path": "/free5gc/cert/nssf.key", "sha256": "b9dbdab79c28eb06e268026e7e8316a0c155ed1096f507f7ee4bc66c03fa5c16", "upstream": "free5gc", "file": "nssf.key", "classification": "public-upstream-default-key"},
+    {"path": "/free5gc/cert/udm.key", "sha256": "7e04a23d30f6869a218253a9cea83c642ad620357d4329bcb3fafd098e3bed2d", "upstream": "free5gc", "file": "udm.key", "classification": "public-upstream-default-key"},
+    {"path": "/free5gc/cert/smf.key", "sha256": "166491d9b974775617d043f73e04640148ed44d9e23271c35f3956632ec949e1", "upstream": "free5gc", "file": "smf.key", "classification": "public-upstream-default-key"},
+    {"path": "/free5gc/cert/ausf.key", "sha256": "ba8095d30d69cb6f666281d0605520ff221f7ed551c715dd0a9161a8a3561428", "upstream": "free5gc", "file": "ausf.key", "classification": "public-upstream-default-key"},
+    {"path": "/free5gc/cert/udr.key", "sha256": "bd6e5e81a1d89bd5cb8a16941daaa9af0e02aa7134f45accbd28270bf3f2d665", "upstream": "free5gc", "file": "udr.key", "classification": "public-upstream-default-key"},
+    {"path": "/free5gc/cert/amf.key", "sha256": "23f40cce6435a27609ea2bb721a33c1a6c98259ea141aaf30dc240030841ff25", "upstream": "free5gc", "file": "amf.key", "classification": "public-upstream-default-key"},
+    {"path": "/free5gc/cert/chf.key", "sha256": "6ae0e629ffdd22fe0d3a3e330a3fa4971a60fbbebc20556748960f975f581c8c", "upstream": "free5gc", "file": "chf.key", "classification": "public-upstream-default-key"},
+    {"path": "/free5gc/cert/pcf.key", "sha256": "7deb0baee4768bcc10194127e0e98e565808936ee11f806a5a478c99b05cb65e", "upstream": "free5gc", "file": "pcf.key", "classification": "public-upstream-default-key"},
+    {"path": "/opt/go/src/crypto/x509/platform_root_key.pem", "sha256": "2fea2ebe77388df61566fcd43eb0070dbff2842c8786a0e7906a13e5f10c3e65", "upstream": "go", "file": "platform_root_key.pem", "classification": "public-upstream-test-fixture"}
+  ]
+}

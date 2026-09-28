@@ -1,0 +1,10 @@
+---
+- name: Restart free5GC lab
+  ansible.builtin.systemd_service:
+    name: free5gc-lab
+    state: restarted
+
+- name: Record that dependent RAN services need reconnection
+  ansible.builtin.set_fact:
+    free5gc_restarted: true
+  listen: Restart free5GC lab

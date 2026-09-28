@@ -1,0 +1,123 @@
+schema_version: 1
+
+host:
+  libvirt_uri: qemu:///system
+  image_directory: /var/lib/libvirt/images/srv6-mup
+  ssh_public_key: ~/.ssh/id_ed25519.pub
+  ssh_private_key: ~/.ssh/id_ed25519
+  ansible_user: ubuntu
+  dashboard:
+    listen: 127.0.0.1:8787
+    interval: 5s
+    tailscale:
+      enabled: true
+      interface: tailscale0
+      port: 8787
+
+nodes:
+  core:
+    name: lab-core
+    management_ipv4: 192.168.123.10
+    management_mac: '52:54:00:5c:00:10'
+  ran:
+    name: lab-ran
+    management_ipv4: 192.168.123.11
+    management_mac: '52:54:00:5c:00:11'
+  # Stable internal ID for MUP PE (N3/Interwork side); not a specification term.
+  tpe:
+    name: lab-tpe
+    management_ipv4: 192.168.123.12
+    management_mac: '52:54:00:5c:00:12'
+    n3_core_mac: '52:54:00:5c:32:12'
+  # Stable internal ID for MUP PE (N6/Direct side); not a specification term.
+  npe:
+    name: lab-npe
+    management_ipv4: 192.168.123.13
+    management_mac: '52:54:00:5c:00:13'
+    n6_mac: '52:54:00:5c:06:13'
+  mupc:
+    name: lab-mupc
+    management_ipv4: 192.168.123.14
+    management_mac: '52:54:00:5c:00:14'
+  dn:
+    name: lab-dn
+    management_ipv4: 192.168.123.15
+    management_mac: '52:54:00:5c:00:15'
+
+networks:
+  management:
+    name: lab-mgmt
+    bridge: virbr-mup0
+    gateway_ipv4: 192.168.123.1
+    netmask: 255.255.255.0
+    prefix_length: 24
+    dhcp_start: 192.168.123.100
+    dhcp_end: 192.168.123.199
+  n2:
+    name: lab-n2
+    bridge: virbr-mup2
+    subnet: 10.210.2.0/24
+    amf_ipv4: 10.210.2.10
+    gnb_ipv4: 10.210.2.11
+  n3_access:
+    name: lab-n3a
+    bridge: virbr-mup3a
+    subnet: 10.210.31.0/24
+    gnb_ipv4: 10.210.31.11
+    tpe_ipv4: 10.210.31.12
+  n3_core:
+    name: lab-n3b
+    bridge: virbr-mup3b
+    subnet: 10.210.32.0/24
+    upf_ipv4: 10.210.32.10
+    tpe_ipv4: 10.210.32.12
+  sr_underlay:
+    name: lab-sr
+    bridge: virbr-mupsr
+    mtu: 2000
+    subnet: '2001:db8:100:10::/64'
+    tpe_ipv6: '2001:db8:100:10::12'
+    npe_ipv6: '2001:db8:100:10::13'
+    tpe_locator: 'fd10:1::/48'
+    npe_locator: 'fd10:2::/48'
+    npe_gtp4_source_prefix: 'fd10:2:100::/64'
+    tpe_trigger_prefix: 'fd10:1::/56'
+    tpe_service_sid: 'fd10:1:0:1::'
+    npe_service_sid: 'fd10:2:0:1::'
+  n6:
+    name: lab-n6
+    bridge: virbr-mup6
+    subnet: 10.210.6.0/24
+    upf_ipv4: 10.210.6.10
+    npe_ipv4: 10.210.6.13
+    dn_ipv4: 10.210.6.15
+  ue:
+    pool: 10.60.0.0/16
+
+mup:
+  local_asn: 65000
+  bgp_port: 179
+  observer_interval: 5s
+  observer_lease: 15s
+  session_rd: '65000:10'
+  t1_route_target: '65000:100'
+  t2_route_target: '65000:200'
+  direct_segment_asn: 65000
+  direct_segment_id: 1
+  teid_prefix_length: 32
+  tpe_isd_rd: '65000:12'
+  npe_dsd_rd: '65000:13'
+  npe_dsd_address: 10.210.255.13
+
+subscriber:
+  supi: imsi-208930000000001
+  mcc: '208'
+  mnc: '93'
+  key: 8baf473f2f8fd09487cccbd7097c6862
+  opc: 8e27b6af0e692e750f32667a3b14605d
+  amf: '8000'
+  imei: '356938035643803'
+  imei_sv: '4370816125816151'
+  dnn: internet
+  sst: 1
+  sd: '010203'

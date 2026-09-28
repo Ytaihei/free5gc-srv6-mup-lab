@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements-dev.txt
+
+      - name: Run project checks
+        run: make check
+
+      - name: Run Ansible syntax check
+        run: ansible-playbook -i ansible/inventory/lab-inventory ansible/site.yml --syntax-check
+
+      - name: Run ShellCheck
+        run: make lint
+
+      - name: Check extracted public-source candidate
+        run: |
+          candidate_dir=$(mktemp -d)
+          python3 scripts/export-source.py --revision HEAD --output "$candidate_dir/source.tar.gz"
+          tar -xzf "$candidate_dir/source.tar.gz" -C "$candidate_dir"
+          cd "$candidate_dir/free5gc-srv6-mup-lab"
+          python3 scripts/export-source.py --check-tree .
+          ./scripts/verification-tool.sh gitleaks dir . --redact --config .gitleaks.toml
+          make check
+          make lint
+          ansible-playbook -i ansible/inventory/lab-inventory ansible/site.yml --syntax-check
+          git init -q -b main
+          git add -- .
+          git -c user.name='Source verification' -c user.email='verify@example.invalid' -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -qm 'Public source fixture'
+          python3 scripts/export-source.py --check-history .
+
+      - name: Reject whitespace errors
+        run: git diff --check

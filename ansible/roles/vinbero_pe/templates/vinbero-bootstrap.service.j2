@@ -1,0 +1,12 @@
+[Unit]
+Description=Configure local SRv6 MUP segment and discovery route
+Requires=vinbero.service
+After=vinbero.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/vinbero-bootstrap.sh
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target

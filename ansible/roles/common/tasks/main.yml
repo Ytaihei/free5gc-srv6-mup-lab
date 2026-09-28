@@ -1,0 +1,45 @@
+---
+- name: Wait for cloud-init
+  ansible.builtin.command: cloud-init status --wait
+  changed_when: false
+
+- name: Install common diagnostics
+  ansible.builtin.apt:
+    update_cache: true
+    name:
+      - curl
+      - git
+      - iproute2
+      - iputils-ping
+      - jq
+      - python3
+      - tcpdump
+    state: present
+
+- name: Install MUP PE (N6/Direct side) VRF module before applying its declarative netplan
+  ansible.builtin.apt:
+    name: linux-modules-extra-{{ ansible_kernel }}
+    state: present
+  when: lab_role == 'npe'
+
+- name: Load MUP PE (N6/Direct side) VRF module before netplan creates the tenant interface
+  ansible.builtin.command: modprobe vrf
+  changed_when: false
+  when: lab_role == 'npe'
+
+- name: Install deterministic network configuration
+  ansible.builtin.template:
+    src: 99-lab.yaml.j2
+    dest: /etc/netplan/99-lab.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  register: lab_netplan
+
+- name: Validate netplan
+  ansible.builtin.command: netplan generate
+  changed_when: false
+
+- name: Apply lab interfaces
+  ansible.builtin.command: netplan apply
+  when: lab_netplan.changed

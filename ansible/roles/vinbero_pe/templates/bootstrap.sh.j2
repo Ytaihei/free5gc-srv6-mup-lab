@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export VINBERO_SERVER=http://127.0.0.1:8080
+
+for attempt in $(seq 1 30); do
+  if /usr/local/bin/vinbero locator list >/dev/null 2>&1; then break; fi
+  [[ $attempt != 30 ]] || { echo "vinberod API did not become ready" >&2; exit 1; }
+  sleep 1
+done
+
+{% if pe_role == 'tpe' %}
+# Static locator routes and the MUP PE (N6/Direct side) tenant VRF belong to Netplan. Keeping
+# them only here lets networkd remove them during a reload/package update.
+/usr/local/bin/vinbero sid create \
+  --trigger-prefix {{ lab_config.networks.sr_underlay.tpe_trigger_prefix }} --action END_M_GTP4_E \
+  --gtp-v4-src-addr {{ lab_config.networks.n3_core.upf_ipv4 }} --args-offset 7
+
+/usr/local/bin/vinbero mup create --route-type isd \
+  --rd {{ lab_config.mup.tpe_isd_rd }} --prefix {{ lab_config.networks.n3_access.subnet }} \
+  --route-targets {{ lab_config.mup.t1_route_target }} --sid {{ lab_config.networks.sr_underlay.tpe_service_sid }} \
+  --next-hop {{ lab_config.networks.sr_underlay.tpe_ipv6 }}
+
+ping -6 -c 1 -W 2 {{ lab_config.networks.sr_underlay.npe_ipv6 }} >/dev/null 2>&1 || true
+ping -c 1 -W 2 {{ lab_config.networks.n3_core.upf_ipv4 }} >/dev/null 2>&1 || true
+{% else %}
+/usr/local/bin/vinbero sid create \
+  --trigger-prefix {{ lab_config.networks.sr_underlay.npe_service_sid }}/128 --action END_DT4 \
+  --vrf-name mup-dn
+
+/usr/local/bin/vinbero mup create --route-type dsd \
+  --rd {{ lab_config.mup.npe_dsd_rd }} --address {{ lab_config.mup.npe_dsd_address }} \
+  --segment-id2 {{ lab_config.mup.direct_segment_asn }} --segment-id4 {{ lab_config.mup.direct_segment_id }} \
+  --route-targets {{ lab_config.mup.t2_route_target }} --sid {{ lab_config.networks.sr_underlay.npe_service_sid }} \
+  --next-hop {{ lab_config.networks.sr_underlay.npe_ipv6 }}
+
+ping -6 -c 1 -W 2 {{ lab_config.networks.sr_underlay.tpe_ipv6 }} >/dev/null 2>&1 || true
+# Seed the N6 neighbour in the tenant table. End.DT4's bpf_fib_lookup does
+# not create a neighbour entry when lookup otherwise succeeds.
+ip vrf exec mup-dn ping -c 1 -W 2 {{ lab_config.networks.n6.dn_ipv4 }} >/dev/null 2>&1 || true
+{% endif %}
+
+/usr/local/bin/vinbero sid list
+/usr/local/bin/vinbero mup list

@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] bgp: use upstream GoBGP v4.8 MUP draft-01 API
+
+GoBGP v4.8 contains the optional-source T1ST framing that Vinbero's fork
+carried. Its MUP extended-community constructor also requires the explicit
+draft-ietf-bess-mup-safi-01 subtype.
+---
+ go.mod                                   | 10 +---------
+ pkg/bgp/gobgp/advertise_mup.go           |  2 +-
+ pkg/bgp/gobgp/decode_mup_test.go         |  2 +-
+ 3 files changed, 3 insertions(+), 11 deletions(-)
+
+diff --git a/go.mod b/go.mod
+index 928286a..33ce96c 100644
+--- a/go.mod
++++ b/go.mod
+@@ -8,7 +8,7 @@ require (
+ 	github.com/google/gopacket v1.1.19
+ 	github.com/google/uuid v1.6.0
+ 	github.com/mcuadros/go-defaults v1.2.0
+-	github.com/osrg/gobgp/v4 v4.5.0
++	github.com/osrg/gobgp/v4 v4.8.0
+ 	github.com/pkg/errors v0.9.1
+ 	github.com/urfave/cli/v2 v2.27.7
+ 	github.com/vishvananda/netlink v1.3.1
+@@ -47,11 +47,3 @@ require (
+ 	golang.org/x/text v0.32.0 // indirect
+ 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
+ )
+-
+-// gobgp fork carries the draft-mpmz-bess-mup-safi-01 T1ST framing patch.
+-// Some peers only accept draft-01 framing (source-less T1ST routes must
+-// omit the trailing SourceAddressLength octet; -03 framing is still
+-// accepted on decode). The tag tracks the fork's mup-t1st-source-optional
+-// branch on top of upstream master. If the patch lands in upstream
+-// gobgp the replace directive can be dropped.
+-replace github.com/osrg/gobgp/v4 => github.com/takehaya/gobgp/v4 v4.7.0-mup-draft01
+diff --git a/pkg/bgp/gobgp/advertise_mup.go b/pkg/bgp/gobgp/advertise_mup.go
+index 5304c8b..282c80a 100644
+--- a/pkg/bgp/gobgp/advertise_mup.go
++++ b/pkg/bgp/gobgp/advertise_mup.go
+@@ -138,7 +138,7 @@ func mupExtComms(r bgp.MUPRoute, withSegmentID bool) (gobgppkt.PathAttributeInte
+ 		return nil, err
+ 	}
+ 	if withSegmentID && (r.SegmentID2 != 0 || r.SegmentID4 != 0) {
+-		ecs = append(ecs, gobgppkt.NewMUPExtended(r.SegmentID2, r.SegmentID4))
++		ecs = append(ecs, gobgppkt.NewMUPExtended(gobgppkt.EC_SUBTYPE_MUP_DIRECT_SEG, r.SegmentID2, r.SegmentID4))
+ 	}
+ 	if len(ecs) == 0 {
+ 		return nil, nil
+diff --git a/pkg/bgp/gobgp/decode_mup_test.go b/pkg/bgp/gobgp/decode_mup_test.go
+index 502d330..9f606f5 100644
+--- a/pkg/bgp/gobgp/decode_mup_test.go
++++ b/pkg/bgp/gobgp/decode_mup_test.go
+@@ -107,7 +107,7 @@ func TestDecodeMUP_SegmentID(t *testing.T) {
+ 	rd := gobgppkt.NewRouteDistinguisherTwoOctetAS(65000, 100)
+ 	nlri := gobgppkt.NewMUPType2SessionTransformedRoute(rd, 64, netip.MustParseAddr("192.0.2.100"), teidAddr(0x11223344))
+ 	ext := &gobgppkt.PathAttributeExtendedCommunities{
+-		Value: []gobgppkt.ExtendedCommunityInterface{gobgppkt.NewMUPExtended(7, 0xdeadbeef)},
++		Value: []gobgppkt.ExtendedCommunityInterface{gobgppkt.NewMUPExtended(gobgppkt.EC_SUBTYPE_MUP_DIRECT_SEG, 7, 0xdeadbeef)},
+ 	}
+ 
+ 	got := decodeMUPRoute(mupPath(nlri, ext))
+-- 
+2.51.0

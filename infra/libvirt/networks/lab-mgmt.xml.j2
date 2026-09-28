@@ -1,0 +1,13 @@
+<network>
+  <name>{{ lab.networks.management.name }}</name>
+  <forward mode='nat'/>
+  <bridge name='{{ lab.networks.management.bridge }}' stp='on' delay='0'/>
+  <ip address='{{ lab.networks.management.gateway_ipv4 }}' netmask='{{ lab.networks.management.netmask }}'>
+    <dhcp>
+      <range start='{{ lab.networks.management.dhcp_start }}' end='{{ lab.networks.management.dhcp_end }}'/>
+{% for role in ['core', 'ran', 'tpe', 'npe', 'mupc', 'dn'] %}
+      <host mac='{{ lab.nodes[role].management_mac }}' name='{{ lab.nodes[role].name }}' ip='{{ lab.nodes[role].management_ipv4 }}'/>
+{% endfor %}
+    </dhcp>
+  </ip>
+</network>

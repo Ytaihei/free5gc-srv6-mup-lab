@@ -1,0 +1,66 @@
+services:
+  free5gc-amf:
+    image: {{ container_images.free5gc_amf }}
+    networks:
+      lab_n2:
+        ipv4_address: {{ lab_config.networks.n2.amf_ipv4 }}
+  free5gc-upf:
+    image: {{ container_images.free5gc_upf }}
+    networks:
+      lab_n3b:
+        ipv4_address: {{ lab_config.networks.n3_core.upf_ipv4 }}
+      lab_n6:
+        ipv4_address: {{ lab_config.networks.n6.upf_ipv4 }}
+  ueransim:
+    profiles: [stock-ueransim]
+  free5gc-nrf:
+    image: {{ container_images.free5gc_nrf }}
+  free5gc-ausf:
+    image: {{ container_images.free5gc_ausf }}
+  free5gc-nssf:
+    image: {{ container_images.free5gc_nssf }}
+  free5gc-pcf:
+    image: {{ container_images.free5gc_pcf }}
+  free5gc-smf:
+    image: {{ container_images.free5gc_smf }}
+  free5gc-udm:
+    image: {{ container_images.free5gc_udm }}
+  free5gc-udr:
+    image: {{ container_images.free5gc_udr }}
+  free5gc-webui:
+    image: {{ container_images.free5gc_webui }}
+  free5gc-chf:
+    image: {{ container_images.free5gc_chf }}
+  free5gc-n3iwf:
+    image: {{ container_images.free5gc_n3iwf }}
+  free5gc-tngf:
+    image: {{ container_images.free5gc_tngf }}
+  free5gc-nef:
+    image: {{ container_images.free5gc_nef }}
+  n3iwue:
+    image: {{ container_images.free5gc_n3iwue }}
+  db:
+    image: {{ container_images.mongo }}
+
+networks:
+  lab_n2:
+    driver: macvlan
+    driver_opts:
+      parent: enp2s0
+    ipam:
+      config:
+        - subnet: {{ lab_config.networks.n2.subnet }}
+  lab_n3b:
+    driver: macvlan
+    driver_opts:
+      parent: enp3s0
+    ipam:
+      config:
+        - subnet: {{ lab_config.networks.n3_core.subnet }}
+  lab_n6:
+    driver: macvlan
+    driver_opts:
+      parent: enp4s0
+    ipam:
+      config:
+        - subnet: {{ lab_config.networks.n6.subnet }}

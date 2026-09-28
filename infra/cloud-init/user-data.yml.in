@@ -1,0 +1,20 @@
+#cloud-config
+hostname: __HOSTNAME__
+manage_etc_hosts: true
+users:
+  - name: __USER__
+    gecos: Lab administrator
+    groups: [adm, sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - __SSH_KEY__
+ssh_pwauth: false
+disable_root: true
+package_update: true
+packages:
+  - python3
+  - qemu-guest-agent
+runcmd:
+  - [systemctl, enable, --now, qemu-guest-agent]
+final_message: "lab cloud-init complete"

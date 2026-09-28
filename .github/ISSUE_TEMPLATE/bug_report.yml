@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a reproducible defect in the lab automation or implementation
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include private keys, tokens, Tailnet configuration, or non-lab subscriber data.
+  - type: input
+    id: revision
+    attributes:
+      label: Commit
+      description: Exact Git commit used for the test
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Host OS, architecture, kernel, libvirt, Docker, and Ansible versions
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Minimal commands that reproduce the problem
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true

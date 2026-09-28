@@ -1,0 +1,18 @@
+[Unit]
+Description=free5GC lab core
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/free5gc-compose
+ExecStart=/usr/bin/docker compose -f docker-compose.yaml -f compose.lab.yaml up -d free5gc-upf db free5gc-nrf free5gc-amf free5gc-ausf free5gc-nssf free5gc-pcf free5gc-smf free5gc-udm free5gc-udr free5gc-webui free5gc-chf
+ExecStartPost=/usr/bin/docker exec upf ip route replace {{ lab_config.networks.n3_access.gnb_ipv4 }}/32 via {{ lab_config.networks.n3_core.tpe_ipv4 }}
+ExecStop=/usr/bin/docker compose -f docker-compose.yaml -f compose.lab.yaml down
+TimeoutStartSec=600
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

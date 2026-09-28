@@ -1,0 +1,19 @@
+[Unit]
+Description=UERANSIM gNB
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/UERANSIM
+# The core and RAN VMs boot concurrently. free5GC's AMF begins listening a few
+# seconds after network-online, while UERANSIM keeps a failed initial SCTP
+# attempt alive with a barred cell. Delay the first attempt past that window.
+ExecStartPre=/bin/sleep 10
+ExecStart=/opt/UERANSIM/build/nr-gnb -c /opt/UERANSIM/config/free5gc-gnb.yaml
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

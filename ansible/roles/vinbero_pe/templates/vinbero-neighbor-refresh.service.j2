@@ -1,0 +1,10 @@
+[Unit]
+Description=Resolve the lab DN neighbor for Vinbero End.DT4 forwarding
+After=network-online.target
+
+[Service]
+Type=oneshot
+# XDP FIB lookup cannot initiate ARP. This is an MUP PE (N6/Direct side)-originated maintenance
+# probe, not UE user traffic or evidence that the MUP path is working.
+ExecStart=/usr/sbin/ip vrf exec mup-dn /usr/bin/ping -n -c 1 -W 2 {{ lab_config.networks.n6.dn_ipv4 }}
+TimeoutStartSec=5

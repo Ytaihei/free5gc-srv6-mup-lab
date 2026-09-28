@@ -1,0 +1,5 @@
+MUP_LISTEN=0.0.0.0:8088
+MUP_DB_PATH=/var/lib/mup-controller/sessions.db
+MUP_APPLY={{ mup_apply | ternary('true', 'false') }}
+MUP_NEXT_HOP={{ lab_config.nodes.mupc.management_ipv4 }}
+LOG_LEVEL=INFO

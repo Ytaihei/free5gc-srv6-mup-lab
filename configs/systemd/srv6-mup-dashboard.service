@@ -1,0 +1,19 @@
+[Unit]
+Description=SRv6 MUP observability dashboard and U-Plane probe
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/srv6-mup/dashboard.env
+ExecStart=%h/.local/bin/srv6-mup-dashboard -listen ${MUP_DASHBOARD_LISTEN} -tailnet-port ${MUP_TAILNET_PORT} -tailnet-interface ${MUP_TAILNET_INTERFACE} -interval ${MUP_DASHBOARD_INTERVAL}
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%t
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,47 @@
+schema_version: 1
+scope: container-images-only
+go_source_mappings:
+  - name: github.com/tianon/gosu
+    scanner_version: v1.19.0
+    module_version: v0.0.0-20250923190938-6456aaa0f3c8
+    commit: 6456aaa0f3c854d199d0f037f068eb97515b7513
+    evidence: https://github.com/tianon/gosu/releases/tag/1.19
+    reason: Release 1.19 is not a Go-semver tag; retain the original scanner version and the exact source commit separately.
+# Classification is NOT redistribution approval. Review actual license texts,
+# linking, modifications and deployment; preserve every scanner finding.
+fail_severities: [HIGH, CRITICAL]
+license_groups:
+  notices:
+    licenses: [Apache-2.0, BSD-2-Clause, BSD-3-Clause, BSD-4-Clause, ISC, MIT, X11, Zlib, Python-2.0, PSF-2.0, OpenSSL, Unlicense, CC0-1.0]
+    requires: [license-texts, copyright-and-notices, modifications-record]
+  file-reciprocal:
+    licenses: [MPL-2.0]
+    requires: [license-texts, copyright-and-notices, covered-file-sources, modifications-record]
+  library-reciprocal:
+    licenses: [LGPL-2.0-only, LGPL-2.0-or-later, LGPL-2.1-only, LGPL-2.1-or-later, LGPL-3.0-only, LGPL-3.0-or-later]
+    requires: [license-texts, copyright-and-notices, corresponding-source, linking-and-relinking-review, modifications-record]
+  reciprocal:
+    licenses: [GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later]
+    requires: [license-texts, copyright-and-notices, corresponding-source, build-and-install-scripts, modifications-record]
+  network-reciprocal:
+    licenses: [AGPL-3.0-only, AGPL-3.0-or-later]
+    requires: [license-texts, copyright-and-notices, corresponding-source, build-and-install-scripts, modifications-record, network-source-access-review]
+  service-review:
+    licenses: [SSPL-1.0]
+    requires: [license-texts, copyright-and-notices, corresponding-source, service-scope-review, explicit-distribution-review]
+# public-domain and ambiguous GPL-2.0/LGPL-2.1 labels, compound expressions,
+# custom identifiers and absent metadata need exact package/file text review.
+# Do not normalize them to a more convenient license automatically.
+license_metadata:
+  - {name: stdlib, version: v1.26.8, licenses: [BSD-3-Clause], source: 'https://github.com/golang/go/blob/go1.26.8/LICENSE'}
+  - {name: github.com/fclairamb/afero-snd, version: v0.1.1-0.20220917220349-7844d753b751, licenses: [MIT], source: 'https://github.com/fclairamb/afero-snd/blob/7844d753b751c069164261a0b0105561a348d80f/LICENSE'}
+required_artifact_materials:
+  - immutable-image-and-layer-digests
+  - exact-artifact-sbom
+  - complete-component-and-license-inventory
+  - license-texts-and-notices
+  - exact-corresponding-source-and-modifications
+  - build-and-install-recipes-and-toolchain-locks
+  - all-layer-privacy-and-history-review
+  - vulnerability-disposition-and-supported-base-review
+  - human-distribution-and-publication-approval

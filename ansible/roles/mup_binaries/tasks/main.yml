@@ -1,0 +1,118 @@
+---
+- name: Install Go application build prerequisites
+  ansible.builtin.apt:
+    update_cache: true
+    name: [ca-certificates]
+    state: present
+
+- name: Select host-specific MUP binaries
+  ansible.builtin.set_fact:
+    mup_binary_targets: >-
+      {{ ['pfcp-observer', 'mupctl']
+         if inventory_hostname in groups['core']
+         else ['mup-controller', 'mupctl'] }}
+
+- name: Create versioned Go toolchain directory
+  ansible.builtin.file:
+    path: /opt/go-{{ go_version }}
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Download pinned Go toolchain with checksum verification
+  ansible.builtin.get_url:
+    url: https://go.dev/dl/go{{ go_version }}.linux-amd64.tar.gz
+    dest: /var/cache/go{{ go_version }}.linux-amd64.tar.gz
+    checksum: sha256:{{ go_linux_amd64_sha256 }}
+    mode: '0644'
+
+- name: Extract pinned Go toolchain
+  ansible.builtin.unarchive:
+    src: /var/cache/go{{ go_version }}.linux-amd64.tar.gz
+    dest: /opt/go-{{ go_version }}
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    creates: /opt/go-{{ go_version }}/bin/go
+
+- name: Create MUP Go source tree
+  ansible.builtin.file:
+    path: /usr/src/srv6-mup-lab
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install unprivileged CLI controller endpoint
+  ansible.builtin.copy:
+    dest: /etc/srv6-mup-controller-url
+    content: 'http://{{ lab_config.nodes.mupc.management_ipv4 }}:9443'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create MUP binary staging directory
+  ansible.builtin.file:
+    path: /usr/local/libexec/srv6-mup
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy Go module manifests
+  ansible.builtin.copy:
+    src: '{{ lab_repo_local }}/{{ item }}'
+    dest: /usr/src/srv6-mup-lab/{{ item }}
+    owner: root
+    group: root
+    mode: '0644'
+  loop: [go.mod, go.sum]
+
+- name: Copy MUP Go source directories
+  ansible.builtin.copy:
+    src: '{{ lab_repo_local }}/{{ item }}/'
+    dest: /usr/src/srv6-mup-lab/{{ item }}/
+    owner: root
+    group: root
+    mode: preserve
+  loop: [api, cmd, internal]
+
+- name: Run MUP Go unit tests before installation
+  ansible.builtin.command: >-
+    /opt/go-{{ go_version }}/bin/go test ./internal/...
+    {% for target in mup_binary_targets %}./cmd/{{ target }} {% endfor %}
+  args:
+    chdir: /usr/src/srv6-mup-lab
+  environment:
+    CGO_ENABLED: '0'
+    GOTOOLCHAIN: local
+  changed_when: false
+
+- name: Build MUP Go binaries
+  ansible.builtin.command: >-
+    /opt/go-{{ go_version }}/bin/go build -trimpath
+    -o /usr/local/libexec/srv6-mup/{{ item }}.candidate ./cmd/{{ item }}
+  args:
+    chdir: /usr/src/srv6-mup-lab
+  # free5GC installs gcc later. Keep Go's build mode stable on the next run.
+  environment:
+    CGO_ENABLED: '0'
+    GOTOOLCHAIN: local
+  loop: '{{ mup_binary_targets }}'
+  changed_when: false
+
+- name: Install changed MUP Go binaries atomically
+  ansible.builtin.copy:
+    src: /usr/local/libexec/srv6-mup/{{ item }}.candidate
+    dest: /usr/local/bin/{{ item }}
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
+  loop: '{{ mup_binary_targets }}'
+  register: mup_binary_install
+
+- name: Record whether a running MUP service needs restart
+  ansible.builtin.set_fact:
+    mup_binaries_changed: >-
+      {{ mup_binary_install.results | selectattr('changed') | list | length > 0 }}

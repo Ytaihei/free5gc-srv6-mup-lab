@@ -1,0 +1,210 @@
+---
+- name: Install free5GC build and runtime dependencies
+  ansible.builtin.apt:
+    update_cache: true
+    name:
+      - build-essential
+      - docker.io
+      - docker-compose-v2
+      - gcc
+      - git
+      - libmnl-dev
+      - linux-headers-generic
+      - make
+    state: present
+
+- name: Enable Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Enable forwarding inside the core VM only
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-free5gc-lab.conf
+    mode: '0644'
+    content: |
+      net.ipv4.ip_forward=1
+      net.ipv6.conf.all.forwarding=1
+  register: free5gc_sysctl
+
+- name: Apply core forwarding sysctls
+  ansible.builtin.command: sysctl --system
+  when: free5gc_sysctl.changed
+
+- name: Check out pinned gtp5g
+  ansible.builtin.git:
+    repo: https://github.com/free5gc/gtp5g.git
+    dest: /usr/src/gtp5g-{{ gtp5g_version }}
+    version: '{{ gtp5g_commit }}'
+    depth: 1
+
+- name: Build gtp5g
+  ansible.builtin.command: make
+  args:
+    chdir: /usr/src/gtp5g-{{ gtp5g_version }}
+  changed_when: false
+
+- name: Install gtp5g
+  ansible.builtin.command: make install
+  args:
+    chdir: /usr/src/gtp5g-{{ gtp5g_version }}
+  changed_when: false
+
+- name: Load gtp5g at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/gtp5g.conf
+    mode: '0644'
+    # Match gtp5g's own `make install` output so subsequent Ansible runs do
+    # not rewrite the same boot-time module list on every pass.
+    content: |
+      udp_tunnel
+      gtp5g
+
+- name: Load gtp5g now
+  ansible.builtin.command: modprobe gtp5g
+  changed_when: false
+
+- name: Check out pinned free5gc-compose
+  ansible.builtin.git:
+    repo: https://github.com/free5gc/free5gc-compose.git
+    dest: /opt/free5gc-compose
+    version: '{{ free5gc_compose_commit }}'
+    recursive: true
+    update: false
+    force: false
+
+- name: Read pristine pinned free5GC configurations
+  ansible.builtin.command:
+    argv: [git, show, '{{ free5gc_compose_commit }}:config/{{ item }}cfg.yaml']
+    chdir: /opt/free5gc-compose
+  loop: [amf, smf, upf, nrf, ausf, nssf]
+  register: free5gc_pristine
+  changed_when: false
+
+- name: Reconcile free5GC network, PLMN, slice, DNN and UE pool
+  ansible.builtin.copy:
+    content: '{{ item.stdout | lab_free5gc(item.item, lab_config) }}'
+    dest: '/opt/free5gc-compose/config/{{ item.item }}cfg.yaml'
+    mode: '0644'
+    backup: true
+  loop: '{{ free5gc_pristine.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  notify: Restart free5GC lab
+
+- name: Install isolated-interface Compose override
+  ansible.builtin.template:
+    src: compose.lab.yaml.j2
+    dest: /opt/free5gc-compose/compose.lab.yaml
+    mode: '0644'
+  notify: Restart free5GC lab
+
+- name: Validate external AMF and UPF addresses
+  ansible.builtin.command: '{{ item }}'
+  loop:
+    - grep -q '{{ lab_config.networks.n2.amf_ipv4 }}' /opt/free5gc-compose/config/amfcfg.yaml
+    - grep -q '{{ lab_config.networks.n3_core.upf_ipv4 }}' /opt/free5gc-compose/config/upfcfg.yaml
+    - grep -q '{{ lab_config.networks.n3_core.upf_ipv4 }}' /opt/free5gc-compose/config/smfcfg.yaml
+  changed_when: false
+
+- name: Validate merged Compose model
+  ansible.builtin.command: docker compose -f docker-compose.yaml -f compose.lab.yaml config --quiet
+  args:
+    chdir: /opt/free5gc-compose
+  changed_when: false
+
+
+- name: Pull pinned free5GC container set
+  ansible.builtin.command: >-
+    docker compose -f docker-compose.yaml -f compose.lab.yaml pull
+  args:
+    chdir: /opt/free5gc-compose
+  changed_when: false
+
+- name: Install free5GC lab service
+  ansible.builtin.template:
+    src: free5gc-lab.service.j2
+    dest: /etc/systemd/system/free5gc-lab.service
+    mode: '0644'
+  register: free5gc_unit
+  notify: Restart free5GC lab
+
+- name: Reload systemd for free5GC
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: free5gc_unit.changed
+
+- name: Enable and start free5GC
+  ansible.builtin.systemd_service:
+    name: free5gc-lab
+    enabled: true
+    state: started
+
+- name: Wait for the free5GC WebUI API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:5000/api/login
+    method: POST
+    body_format: json
+    body:
+      Username: admin
+      Password: free5gc
+    status_code: 200
+    return_content: true
+  register: free5gc_login
+  retries: 30
+  delay: 2
+  until: free5gc_login.status == 200
+  no_log: true
+
+- name: Render desired subscriber data
+  ansible.builtin.set_fact:
+    desired_subscriber: "{{ lookup('ansible.builtin.template', role_path + '/templates/subscriber.json.j2') | lab_from_json }}"
+  no_log: true
+
+- name: Check whether the lab subscriber exists
+  ansible.builtin.uri:
+    url: >-
+      http://127.0.0.1:5000/api/subscriber/{{ lab_config.subscriber.supi }}/{{ lab_config.subscriber.mcc }}{{ lab_config.subscriber.mnc }}
+    method: GET
+    headers:
+      Token: '{{ free5gc_login.json.access_token }}'
+    status_code: [200, 404]
+    return_content: true
+  register: lab_subscriber
+  no_log: true
+
+- name: Provision the lab subscriber through the WebUI API
+  ansible.builtin.uri:
+    url: >-
+      http://127.0.0.1:5000/api/subscriber/{{ lab_config.subscriber.supi }}/{{ lab_config.subscriber.mcc }}{{ lab_config.subscriber.mnc }}
+    method: POST
+    headers:
+      Token: '{{ free5gc_login.json.access_token }}'
+    body_format: json
+    body: '{{ desired_subscriber }}'
+    status_code: [200, 201, 204]
+  when: >-
+    lab_subscriber.status == 404 or
+    lab_subscriber.json.AuthenticationSubscription.permanentKey is none
+  no_log: true
+
+- name: Reconcile the existing lab subscriber
+  ansible.builtin.uri:
+    url: >-
+      http://127.0.0.1:5000/api/subscriber/{{ lab_config.subscriber.supi }}/{{ lab_config.subscriber.mcc }}{{ lab_config.subscriber.mnc }}
+    method: PUT
+    headers:
+      Token: '{{ free5gc_login.json.access_token }}'
+    body_format: json
+    body: '{{ desired_subscriber }}'
+    status_code: [200, 204]
+  when: >-
+    lab_subscriber.status == 200 and
+    lab_subscriber.json.AuthenticationSubscription.permanentKey is not none and
+    ((lab_subscriber.json.AuthenticationSubscription.opc.opcValue | default('')) != lab_config.subscriber.opc or
+     (lab_subscriber.json.AuthenticationSubscription.permanentKey.permanentKeyValue | default('')) != lab_config.subscriber.key or
+     (lab_subscriber.json.AuthenticationSubscription.authenticationManagementField | default('')) != lab_config.subscriber.amf or
+     lab_subscriber.json.SessionManagementSubscriptionData != desired_subscriber.SessionManagementSubscriptionData or
+     lab_subscriber.json.SmfSelectionSubscriptionData != desired_subscriber.SmfSelectionSubscriptionData)
+  no_log: true

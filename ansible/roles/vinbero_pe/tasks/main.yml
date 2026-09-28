@@ -1,0 +1,270 @@
+---
+- name: Stop and disable the retained VPP/sidecar stack
+  ansible.builtin.command: systemctl disable --now {{ item }}
+  loop: [vpp-mobile-bootstrap.service, mup-discovery.service, gobgpd.service, vpp.service]
+  register: legacy_stop
+  changed_when: "'Removed' in legacy_stop.stdout"
+  failed_when: false
+
+- name: Install Vinbero build and runtime prerequisites
+  ansible.builtin.apt:
+    update_cache: true
+    name:
+      - ca-certificates
+      - curl
+      - ethtool
+      - clang
+      - gcc-multilib
+      - git
+      - iproute2
+      - iputils-ping
+      - kmod
+      - libbpf-dev
+      - libelf-dev
+      - linux-modules-extra-{{ ansible_kernel }}
+      - linux-tools-generic
+      - llvm
+    state: present
+
+- name: Load the Linux VRF driver used by End.DT4
+  ansible.builtin.command: modprobe vrf
+  changed_when: false
+
+- name: Load the Linux VRF driver at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/vrf.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      vrf
+
+- name: Create versioned Go toolchain directory
+  ansible.builtin.file:
+    path: /opt/go-{{ go_version }}
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Download pinned Go toolchain with checksum verification
+  ansible.builtin.get_url:
+    url: https://go.dev/dl/go{{ go_version }}.linux-amd64.tar.gz
+    dest: /var/cache/go{{ go_version }}.linux-amd64.tar.gz
+    checksum: sha256:{{ go_linux_amd64_sha256 }}
+    mode: '0644'
+
+- name: Extract pinned Go toolchain
+  ansible.builtin.unarchive:
+    src: /var/cache/go{{ go_version }}.linux-amd64.tar.gz
+    dest: /opt/go-{{ go_version }}
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    creates: /opt/go-{{ go_version }}/bin/go
+
+- name: Check out pinned Vinbero source
+  ansible.builtin.git:
+    repo: https://github.com/takehaya/Vinbero.git
+    dest: /usr/src/vinbero-{{ vinbero_version }}
+    version: '{{ vinbero_commit }}'
+    depth: 1
+    update: false
+    force: false
+
+- name: Install the GoBGP 4.8 compatibility patch
+  ansible.builtin.copy:
+    src: '{{ lab_repo_local }}/third_party/vinbero/patches/0001-gobgp-v4.8-mup-draft01.patch'
+    dest: /usr/src/vinbero-{{ vinbero_version }}/0001-gobgp-v4.8-mup-draft01.patch
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Check whether the Vinbero compatibility patch is present
+  ansible.builtin.command: >-
+    grep -q 'github.com/osrg/gobgp/v4 v4.8.0' go.mod
+  args:
+    chdir: /usr/src/vinbero-{{ vinbero_version }}
+  register: vinbero_patch_present
+  changed_when: false
+  failed_when: false
+
+- name: Apply the Vinbero GoBGP 4.8 compatibility patch
+  ansible.builtin.command: git apply 0001-gobgp-v4.8-mup-draft01.patch
+  args:
+    chdir: /usr/src/vinbero-{{ vinbero_version }}
+  when: vinbero_patch_present.rc != 0
+
+- name: Regenerate Vinbero embedded eBPF objects from the patched C source
+  ansible.builtin.command: /opt/go-{{ go_version }}/bin/go generate ./pkg/bpf
+  args:
+    chdir: /usr/src/vinbero-{{ vinbero_version }}
+  environment:
+    BPF_CLANG: clang
+    BPF_CFLAGS: -O2 -g -Wall -Werror
+    GOTOOLCHAIN: local
+  changed_when: false
+  notify: Restart Vinbero
+
+- name: Resolve Vinbero's patched module graph
+  ansible.builtin.command: /opt/go-{{ go_version }}/bin/go mod tidy
+  environment:
+    GOTOOLCHAIN: local
+  args:
+    chdir: /usr/src/vinbero-{{ vinbero_version }}
+  changed_when: false
+
+- name: Run Vinbero MUP GoBGP compatibility tests
+  ansible.builtin.command: >-
+    /opt/go-{{ go_version }}/bin/go test ./pkg/bgp/gobgp -run MUP -count=1
+  environment:
+    GOTOOLCHAIN: local
+  args:
+    chdir: /usr/src/vinbero-{{ vinbero_version }}
+  changed_when: false
+
+- name: Build patched Vinbero daemon candidate
+  ansible.builtin.command: >-
+    /opt/go-{{ go_version }}/bin/go build -o /usr/src/vinbero-{{ vinbero_version }}/vinberod.candidate ./cmd/vinberod
+  environment:
+    GOTOOLCHAIN: local
+  args:
+    chdir: /usr/src/vinbero-{{ vinbero_version }}
+  changed_when: false
+
+- name: Install patched Vinbero daemon
+  ansible.builtin.copy:
+    src: /usr/src/vinbero-{{ vinbero_version }}/vinberod.candidate
+    dest: /usr/local/bin/vinberod
+    owner: root
+    group: root
+    mode: '0755'
+    remote_src: true
+  notify: Restart Vinbero
+
+- name: Build patched Vinbero CLI candidate
+  ansible.builtin.command: >-
+    /opt/go-{{ go_version }}/bin/go build -o /usr/src/vinbero-{{ vinbero_version }}/vinbero.candidate ./cmd/vinbero
+  environment:
+    GOTOOLCHAIN: local
+  args:
+    chdir: /usr/src/vinbero-{{ vinbero_version }}
+  changed_when: false
+
+- name: Install patched Vinbero CLI
+  ansible.builtin.copy:
+    src: /usr/src/vinbero-{{ vinbero_version }}/vinbero.candidate
+    dest: /usr/local/bin/vinbero
+    owner: root
+    group: root
+    mode: '0755'
+    remote_src: true
+
+- name: Create Vinbero configuration directories
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: [/etc/vinbero, /var/lib/vinbero, /usr/local/libexec]
+
+- name: Configure PE forwarding and reverse-path behavior
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-vinbero-mup.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      net.ipv4.ip_forward=1
+      net.ipv6.conf.all.forwarding=1
+      net.ipv6.conf.all.seg6_enabled=1
+      net.ipv4.conf.all.rp_filter=0
+      net.ipv4.conf.default.rp_filter=0
+  register: vinbero_sysctl
+
+- name: Apply PE forwarding settings
+  ansible.builtin.command: sysctl --system
+  when: vinbero_sysctl.changed
+
+- name: Disable packet offloads that obscure the XDP lab path
+  ansible.builtin.command: ethtool -K {{ item }} gro off lro off txvlan off rxvlan off
+  loop: '{{ host_networks[lab_role] | map(attribute="interface") | list }}'
+  changed_when: false
+  failed_when: false
+
+- name: Install Vinbero node configuration
+  ansible.builtin.template:
+    src: vinbero.yml.j2
+    dest: /etc/vinbero/vinbero.yml
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart Vinbero
+
+- name: Install local segment bootstrap
+  ansible.builtin.template:
+    src: bootstrap.sh.j2
+    dest: /usr/local/libexec/vinbero-bootstrap.sh
+    owner: root
+    group: root
+    mode: '0755'
+  notify: Restart Vinbero bootstrap
+
+- name: Install Vinbero service units
+  ansible.builtin.template:
+    src: '{{ item }}.service.j2'
+    dest: /etc/systemd/system/{{ item }}.service
+    owner: root
+    group: root
+    mode: '0644'
+  loop: [vinbero, vinbero-bootstrap]
+  notify: Restart Vinbero
+
+- name: Reload service definitions
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Install bounded MUP PE (N6/Direct side) neighbor maintenance
+  ansible.builtin.template:
+    src: 'vinbero-neighbor-refresh.{{ item }}.j2'
+    dest: '/etc/systemd/system/vinbero-neighbor-refresh.{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: [service, timer]
+  when: pe_role == 'npe'
+  notify: Restart MUP PE (N6/Direct side) neighbor timer
+
+- name: Enable automatic DN neighbor recovery
+  ansible.builtin.systemd_service:
+    name: vinbero-neighbor-refresh.timer
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: pe_role == 'npe'
+
+- name: Enable and start Vinbero services
+  ansible.builtin.systemd_service:
+    name: '{{ item }}'
+    enabled: true
+    state: started
+  loop: [vinbero, vinbero-bootstrap]
+
+- name: Flush Vinbero handlers before validation
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify the eBPF control plane is responsive
+  ansible.builtin.command: /usr/local/bin/vinbero stats show
+  environment:
+    VINBERO_SERVER: http://127.0.0.1:8080
+  changed_when: false
+
+- name: Verify the local MUP discovery route
+  ansible.builtin.command: /usr/local/bin/vinbero mup list
+  environment:
+    VINBERO_SERVER: http://127.0.0.1:8080
+  register: vinbero_mup_routes
+  changed_when: false
+  failed_when: >-
+    (pe_role == 'tpe' and 'isd' not in vinbero_mup_routes.stdout | lower) or
+    (pe_role == 'npe' and 'dsd' not in vinbero_mup_routes.stdout | lower)

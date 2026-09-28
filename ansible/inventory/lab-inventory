@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir=$(cd "$(dirname "$0")/../.." && pwd)
+case ${1:---list} in
+  --list)
+    exec "$root_dir/scripts/lab-config.py" inventory
+    ;;
+  --host)
+    printf '{}\n'
+    ;;
+  *)
+    echo "Unsupported inventory argument: $1" >&2
+    exit 2
+    ;;
+esac

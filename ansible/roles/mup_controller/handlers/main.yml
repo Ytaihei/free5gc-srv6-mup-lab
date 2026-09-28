@@ -1,0 +1,5 @@
+---
+- name: Restart MUP controller
+  ansible.builtin.systemd_service:
+    name: mup-controller
+    state: restarted

@@ -1,0 +1,81 @@
+{
+  "plmnID": "{{ lab_config.subscriber.mcc }}{{ lab_config.subscriber.mnc }}",
+  "ueId": "{{ lab_config.subscriber.supi }}",
+  "AuthenticationSubscription": {
+    "authenticationManagementField": "{{ lab_config.subscriber.amf }}",
+    "authenticationMethod": "5G_AKA",
+    "milenage": {
+      "op": {
+        "encryptionAlgorithm": 0,
+        "encryptionKey": 0,
+        "opValue": ""
+      }
+    },
+    "opc": {
+      "encryptionAlgorithm": 0,
+      "encryptionKey": 0,
+      "opcValue": "{{ lab_config.subscriber.opc }}"
+    },
+    "permanentKey": {
+      "encryptionAlgorithm": 0,
+      "encryptionKey": 0,
+      "permanentKeyValue": "{{ lab_config.subscriber.key }}"
+    },
+    "sequenceNumber": "000000000000"
+  },
+  "AccessAndMobilitySubscriptionData": {
+    "gpsis": ["msisdn-0900000001"],
+    "nssai": {
+      "defaultSingleNssais": [
+        {"sst": {{ lab_config.subscriber.sst }}, "sd": "{{ lab_config.subscriber.sd }}", "isDefault": true}
+      ],
+      "singleNssais": []
+    },
+    "subscribedUeAmbr": {
+      "downlink": "2 Gbps",
+      "uplink": "1 Gbps"
+    }
+  },
+  "SessionManagementSubscriptionData": [
+    {
+      "singleNssai": {"sst": {{ lab_config.subscriber.sst }}, "sd": "{{ lab_config.subscriber.sd }}"},
+      "dnnConfigurations": {
+        "{{ lab_config.subscriber.dnn }}": {
+          "sscModes": {
+            "defaultSscMode": "SSC_MODE_1",
+            "allowedSscModes": ["SSC_MODE_2", "SSC_MODE_3"]
+          },
+          "pduSessionTypes": {
+            "defaultSessionType": "IPV4",
+            "allowedSessionTypes": ["IPV4"]
+          },
+          "sessionAmbr": {
+            "uplink": "200 Mbps",
+            "downlink": "100 Mbps"
+          },
+          "5gQosProfile": {
+            "5qi": 9,
+            "arp": {"priorityLevel": 8},
+            "priorityLevel": 8
+          }
+        }
+      }
+    }
+  ],
+  "SmfSelectionSubscriptionData": {
+    "subscribedSnssaiInfos": {
+      "{{ '%02x' | format(lab_config.subscriber.sst) }}{{ lab_config.subscriber.sd }}": {"dnnInfos": [{"dnn": "{{ lab_config.subscriber.dnn }}"}]}
+    }
+  },
+  "AmPolicyData": {"subscCats": ["free5gc"]},
+  "SmPolicyData": {
+    "smPolicySnssaiData": {
+      "{{ '%02x' | format(lab_config.subscriber.sst) }}{{ lab_config.subscriber.sd }}": {
+        "snssai": {"sst": {{ lab_config.subscriber.sst }}, "sd": "{{ lab_config.subscriber.sd }}"},
+        "smPolicyDnnData": {"{{ lab_config.subscriber.dnn }}": {"dnn": "{{ lab_config.subscriber.dnn }}"}}
+      }
+    }
+  },
+  "FlowRules": [],
+  "QosFlows": []
+}

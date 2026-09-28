@@ -1,0 +1,20 @@
+---
+- name: Install data-network test tools
+  ansible.builtin.apt:
+    update_cache: true
+    name: [iperf3, nginx-light]
+    state: present
+
+- name: Install deterministic lab response
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    mode: '0644'
+    content: |
+      free5GC SRv6 MUP lab data network
+
+- name: Enable data-network services
+  ansible.builtin.systemd_service:
+    name: '{{ item }}'
+    enabled: true
+    state: started
+  loop: [nginx]

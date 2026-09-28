@@ -1,0 +1,14 @@
+# Optional L1 host for clean-OS recovery testing; not part of the six-VM lab.
+# Do not run alongside the original lab on a 32 GiB physical host.
+name: srv6-mup-repro-host
+memory_mib: 24576
+vcpus: 12
+disk_gib: 280
+user: labadmin
+network:
+  name: srv6-mup-repro-mgmt
+  bridge: virbr-mupr
+  subnet: 192.168.124.0/24
+  gateway: 192.168.124.1
+  address: 192.168.124.10
+  mac: '52:54:00:5c:01:10'

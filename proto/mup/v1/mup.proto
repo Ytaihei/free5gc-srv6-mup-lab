@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package mup.v1;
+
+option go_package = "github.com/Ytaihei/free5gc-srv6-mup-lab/api/mup/v1;mupv1";
+
+import "google/protobuf/empty.proto";
+
+// PFCP-derived state. The observer publishes only sessions whose PFCP
+// transaction completed with an accepted response.
+message Session {
+  string key = 1;
+  uint64 cp_seid = 2;
+  uint64 up_seid = 3;
+  string ue_ipv4 = 4;
+  string dnn = 5;
+  string supi = 6;
+  string upf_gtp_ipv4 = 7;
+  uint32 uplink_teid = 8;
+  string ran_gtp_ipv4 = 9;
+  uint32 downlink_teid = 10;
+  uint32 qfi = 11;
+  int64 observed_unix_nano = 12;
+}
+
+message SyncSnapshotRequest {
+  string observer_id = 1;
+  uint64 generation = 2;
+  int64 observed_unix_nano = 3;
+  repeated Session sessions = 4;
+}
+
+message SyncSnapshotResponse {
+  uint64 accepted_generation = 1;
+  uint32 selected_sessions = 2;
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  string observer_id = 1;
+  uint64 generation = 2;
+  int64 observer_last_seen_unix_nano = 3;
+  bool observer_lease_valid = 4;
+  uint32 observed_sessions = 5;
+  uint32 selected_sessions = 6;
+  uint32 advertised_routes = 7;
+  string bgp_state = 8;
+}
+
+message ListSessionsRequest {}
+
+message ControlledSession {
+  Session session = 1;
+  bool selected = 2;
+  bool suppressed = 3;
+  string reason = 4;
+  bool advertised = 5;
+}
+
+message ListSessionsResponse {
+  repeated ControlledSession sessions = 1;
+}
+
+message SetSuppressionRequest {
+  string key = 1;
+  bool suppressed = 2;
+}
+
+message SetSuppressionResponse {
+  ControlledSession session = 1;
+}
+
+message ReconcileResponse {
+  uint32 selected_sessions = 1;
+  uint32 advertised_routes = 2;
+}
+
+service ObserverIngestService {
+  rpc SyncSnapshot(SyncSnapshotRequest) returns (SyncSnapshotResponse);
+}
+
+service ControllerService {
+  rpc Status(StatusRequest) returns (StatusResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc SetSuppression(SetSuppressionRequest) returns (SetSuppressionResponse);
+  rpc Reconcile(google.protobuf.Empty) returns (ReconcileResponse);
+}

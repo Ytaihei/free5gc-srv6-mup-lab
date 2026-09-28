@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "captures": [
+    {
+      "path": "examples/pcap/one-call/00-one-call-all.pcap",
+      "sha256": "51c7b68193668b31f8269f0314f84883fc0fe599065eafcee5b36c7eb3a2168f",
+      "bytes": 32166,
+      "packets": 234
+    },
+    {
+      "path": "examples/pcap/one-call/01-n2-ngap.pcap",
+      "sha256": "e0f6bf1994e478ce9c0876c905a68d0bc45013f2aec9a95a50275bdc4997220e",
+      "bytes": 3120,
+      "packets": 20
+    },
+    {
+      "path": "examples/pcap/one-call/02-n4-pfcp.pcap",
+      "sha256": "10c0befdb2df021e6379f5d2741f3e50eb1bdda5dfbdffef841ce01359db4faf",
+      "bytes": 2436,
+      "packets": 12
+    },
+    {
+      "path": "examples/pcap/one-call/03-bgp-mup.pcap",
+      "sha256": "bd44a4bf23ca1401d63f234ff0c023f089635bc8f92d62f16e5f10188d163ddd",
+      "bytes": 7611,
+      "packets": 76
+    },
+    {
+      "path": "examples/pcap/one-call/04-n3-gtpu.pcap",
+      "sha256": "884cbcaf37637d31c7d34629af27c25e6953608af21aed4b8b469716911fdbe0",
+      "bytes": 6709,
+      "packets": 42
+    },
+    {
+      "path": "examples/pcap/one-call/05-srv6.pcap",
+      "sha256": "540c421cb300191a8315a1836c1b69db4705dc3da81def27b2dbd904c4ee9242",
+      "bytes": 7549,
+      "packets": 42
+    },
+    {
+      "path": "examples/pcap/one-call/06-n6.pcap",
+      "sha256": "f9d878c05f3fe78d5735efd9e49dfa92e7fbeb1d40bb39a599c9ef29acc62be8",
+      "bytes": 4861,
+      "packets": 42
+    }
+  ]
+}
