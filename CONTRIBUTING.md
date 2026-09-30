@@ -8,12 +8,27 @@ Create a focused branch and keep functional changes separate from generated
 files, dependency locks, and documentation-only changes. Run these checks
 before opening a pull request:
 
+These repository checks need host Go, Ansible, Python YAML/Jinja2 and Make;
+`./lab deps` prepares compact deployment, not all contributor tooling. See
+[host setup](docs/operations.md) and [check coverage](docs/supply-chain.md).
+Do not provision six VMs just to run the offline checks.
+
     make check
     ansible-playbook -i ansible/inventory/lab-inventory ansible/site.yml --syntax-check
     git diff --check
 
-The end-to-end tests alter the lab UE and require six provisioned VMs. State in
-the pull request which of the following were run:
+End-to-end tests disrupt the lab UE. Choose the commands for the deployment you
+own, run them serially, and state the profile and tests in the pull request.
+Documentation-only checks do not imply these forwarding tests were rerun.
+
+For the **single-VM compact profile**, see the [hands-on guide](docs/hands-on.md).
+Use the original checkout/profile; an explicit configuration precedes every
+subcommand as `./lab --config /absolute/profile.yml`. For the default profile:
+
+    ./lab health
+    ./lab test all
+
+For the **six-VM reference**, six provisioned guests are required:
 
     make test-baseline
     MUP_ENABLE=1 make test-mup

@@ -7,6 +7,26 @@ repository approved for publication. Passing source, dependency and secret
 checks is not a full vulnerability audit, legal certification or approval to
 expose running lab services.
 
+## Current publication state: 2026-10-01 (JST)
+
+The source repository [Ytaihei/free5gc-srv6-mup-lab](https://github.com/Ytaihei/free5gc-srv6-mup-lab)
+is public, with `main` as its integration branch and
+[taihei@sfc.wide.ad.jp](mailto:taihei@sfc.wide.ad.jp) as the contact. Source
+publication is no longer awaiting the repository-name/contact decision.
+The reviewed example PCAPs are the explicit exception already described below;
+this is not approval to distribute arbitrary captures or private evidence.
+
+Runtime/NF images, builders and VM images are **not distributed or approved**.
+The bundled `config/compact-release.json` remains `release: null`; use the
+[source-build workflow](prebuilt-development.md) and keep the separate
+[image-distribution gates](image-distribution.md) pending. A source publication
+does not authorize exposing a running lab or publishing recovery history.
+
+The checklist remains guidance for future publication changes. The dated
+2026-09-28 handoff below is a **pre-publication historical record**, not the
+current source-publication task list. Preserve its original counts, results
+and decision boundaries rather than rewriting the past as a later audit.
+
 ## Keep the recovery history private
 
 - Preserve the existing recovery repository privately. Its private files,
@@ -79,13 +99,15 @@ does not sanitize these surfaces.
 
 ## Required decision record
 
-Publication is pending until the owner records the destination, exact source
+Before a new publication, the owner must record the destination, exact source
 digest, reviewed author/contact identities, source/license/privacy check results,
 remote-ref/metadata review, CI/ruleset verification and final explicit approval.
 Record any unavailable checks as unverified, not passed. Runtime service exposure
 and binary/image/PCAP distribution require their own scope and approval.
 
-## Decision handoff: 2026-09-28 (JST)
+<a id="decision-handoff-2026-09-28-jst"></a>
+
+## Historical pre-publication handoff: 2026-09-28 (JST)
 
 | Deliverable | Technical disposition | Still required |
 | --- | --- | --- |

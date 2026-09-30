@@ -25,10 +25,15 @@ Vinbero generic XDP on veth. Performance equivalence to the reference's virtio
 driver-mode XDP is not claimed. Real PFCP, BGP MUP, and user packets remain
 required; synthetic session injection is not a replacement.
 
-## Local M1 candidate
+<a id="local-m1-candidate"></a>
+
+## Local source-build setup and commands
 
 Prerequisites are Ubuntu 24.04 x86-64, libvirt/KVM, Python YAML/Jinja2,
 OpenSSH, curl, Git, qemu-img, virt-install and a working systemd user session.
+Fresh databases use MongoDB 8.0 and require AVX exposed to the guest CPU.
+The current `./lab doctor` does not test AVX; without it, fresh database setup
+fails later even if the host preflight passes. See [database requirements](database-migration.md).
 `./lab deps` previews the package/group changes without requiring Python
 modules. `sudo ./lab deps --apply` explicitly installs them and creates the
 default image directory only if absent. Log out and back in after group
@@ -44,6 +49,11 @@ image readable after libvirt changes its owner. Existing cached images are
 verified but their permissions are not changed automatically. If an older
 cache is unreadable, its owner must grant the operator's `kvm` group read access
 to that specific image; do not recursively change a shared image directory.
+
+The following is a command reference, not a batch to paste into one shell.
+Complete any required logout/login after dependency installation before running
+`doctor`. `shell` opens a container shell: use `exit` to return to the host before
+another host command. For an ordered exercise, use the [hands-on guide](hands-on.md).
 
 ```bash
 ./lab deps

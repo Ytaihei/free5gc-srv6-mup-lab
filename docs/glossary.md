@@ -54,7 +54,7 @@ not by all fields the upstream PFCP package can decode. See
 | Term | Meaning | In this lab |
 |---|---|---|
 | MUP / SRv6 MUP | Mobile User Plane architecture / its SRv6 data-plane realization | Session state becomes routing information; the supported profile is IPv4 UE with a Direct Segment |
-| MUP-C | MUP controller | `lab-mupc` applies policy and originates session routes; its observer runs separately in `lab-core` |
+| MUP-C | MUP controller | Applies policy and originates session routes. Reference: `lab-mupc`, with observer in `lab-core`; compact: separate `mupc` and `observer` services in one VM |
 | MUP PE | MUP-aware provider edge | Both Vinbero edges are MUP PEs: MUP PE (N3/Interwork side), ID `tpe`, and MUP PE (N6/Direct side), ID `npe` |
 | T-PE / N-PE | Legacy lab aliases, not MUP specification terms | Use the MUP PE labels above in explanations. Keep `tpe`/`npe` and `lab-tpe`/`lab-npe` only as compatible configuration, API, CLI and VM identifiers |
 | MUP-GW | Historical gateway term in an early MUP draft | Not the current display name for the N3-side edge; use MUP PE (N3/Interwork side). It is not another SMF or PFCP endpoint |
@@ -101,7 +101,7 @@ The lab mapping is in [address planning](address-plan.md) and the
 | End.DT4 / VRF | IPv4 decapsulation-and-table-lookup behavior / a routing context | MUP PE (N6/Direct side) decapsulates uplink traffic into tenant routing table 100 |
 | End.M.GTP4.E | Mobile behavior that emits IPv4 GTP-U | MUP PE (N3/Interwork side) reconstructs downlink GTP-U toward the gNB; this is not the uplink encapsulation behavior |
 | Args.Mob.Session | Mobile-session arguments carried in the SID layout | The deployed profile uses a fixed offset; it is not a general-purpose arbitrary SID-layout decoder |
-| eBPF / XDP | In-kernel programs/maps / early receive-path processing | Vinbero uses driver-mode XDP on the PE virtio interfaces |
+| eBPF / XDP | In-kernel programs/maps / early receive-path processing | Vinbero uses driver-mode XDP on reference PE virtio interfaces; generic XDP on compact veth interfaces |
 | Fallback | Ordinary UPF forwarding when no selected MUP entry applies | Requires the underlying UPF session and kernel routes to remain valid; it is not a guarantee of zero loss |
 
 See [RFC 8754](https://www.rfc-editor.org/rfc/rfc8754.html),
@@ -114,7 +114,7 @@ and fixed layout are in [architecture](architecture.md) and [address planning](a
 
 | Term | Meaning | In this lab |
 |---|---|---|
-| free5gc-compose / UERANSIM | Containerized 5G core / simulated UE and gNB | Compose runs inside core VM; the complete lab also needs KVM/libvirt and Ansible |
+| free5gc-compose / UERANSIM | Containerized 5G core / simulated UE and gNB | Reference: Compose in core VM, six guests provisioned with KVM/libvirt and Ansible. Compact: core and other lab roles in Compose inside one KVM/libvirt guest, managed by `./lab` |
 | GoBGP / Vinbero | BGP library / MUP SRv6 implementation using eBPF | Controller and PEs intentionally use different pinned GoBGP versions; library capability is not a lab support claim |
 | Connect RPC / mupctl | Typed HTTP RPC interface / controller CLI | Status reads and suppression mutations are different operations; trusted-network binding is not API authentication |
 | 1call / E2E | This lab's single registration-to-data test / end-to-end test | Includes a PDU Session and ICMP/HTTP, not a voice call or an IMS/VoNR test |

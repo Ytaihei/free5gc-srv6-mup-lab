@@ -2,7 +2,11 @@
 
 English | [日本語](portable-configuration.ja.md)
 
-The supported deployment is six x86-64 KVM/libvirt VMs on Ubuntu 24.04,
+This page describes configuration for the **six-VM reference profile only**.
+The single-VM profile has a different partial-override schema and launcher;
+use [compact configuration](compact-lab.md), not these host settings or commands.
+
+The reference deployment is six x86-64 KVM/libvirt VMs on Ubuntu 24.04,
 with free5gc-compose inside the core VM. Compose alone cannot reproduce the
 kernel modules, isolated interfaces and Vinbero XDP data plane. Libvirt XML,
 cloud-init and Ansible supply those layers; no running VM image is distributed.
@@ -74,7 +78,10 @@ The service's private configuration does not need broader filesystem access.
 ## Evidence and remaining boundary
 
 Configuration rendering and invalid-input cases are covered by unit tests.
-Default-profile reconciliation is tested on the existing six-VM host. This
-does **not** establish successful clean-room recovery on another machine, or
-end-to-end operation for every nondefault combination. R5 remains open until
-a second supported KVM host passes the complete test sequence.
+Default-profile reconciliation and clean-OS reproduction on the same physical
+host are recorded in the [validation summary](validation-summary.md). This
+does **not** establish full reproduction on a different physical machine or
+end-to-end operation for every nondefault combination. A second-physical-host
+test is unverified and was explicitly excluded from this acceptance scope by
+the operator; it is not an outstanding mandatory condition for source publication.
+Keep that limitation visible rather than marking the unperformed test as passed.

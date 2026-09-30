@@ -2,6 +2,10 @@
 
 English | [日本語](operations.ja.md)
 
+This page is for the **six-VM reference profile only**. For the single-VM
+Compose profile, use [compact setup](compact-lab.md) and the [hands-on guide](hands-on.md).
+Do not mix their deployment commands, interfaces, dashboard ports or XDP checks.
+
 ## First installation and reconciliation
 
 Read [portable configuration](portable-configuration.md) and prepare the local

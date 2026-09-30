@@ -25,19 +25,36 @@ The implementation of image acquisition is not redistribution approval.
 
 ## User workflow
 
-Once a reviewed release manifest and images are provided together, use the
-matching source archive/tag. These commands are the intended release workflow;
-until then, replace the first startup with the explicit local build above.
+For a **new source-built compact lab today**, follow the host prerequisites in
+the [compact setup guide](compact-lab.md), including guest AVX support for a
+fresh database. Preview/install dependencies first, then log out and back in if
+group membership changed:
 
 ```bash
 ./lab deps
 sudo ./lab deps --apply
+```
+
+After returning to this checkout, build and check the lab:
+
+```bash
 ./lab doctor
-./lab release
-./lab up
+./lab up --build
 ./lab health
 ./lab test one-call
+```
+
+For an existing lab use its original checkout/profile and plain `./lab up` to
+reuse its images, not a new initial build. For customization, first discover
+and edit the component source:
+
+```bash
 ./lab source mup-controller
+```
+
+After editing the displayed source location:
+
+```bash
 ./lab rebuild mup-controller
 ./lab rollback mup-controller
 ```
@@ -48,6 +65,21 @@ tree; external components use preserved editable worktrees. Uncommitted edits
 and local commits are included. All unrelated component overrides remain in
 place. Rollback restores an image, not source files or database contents.
 Startup and most component activations reconnect the UE; they are not hitless.
+
+### Future prebuilt-release workflow
+
+Only after reviewed release images and a matching non-null manifest are
+published, use their matching source archive/tag and the prepared host:
+
+```bash
+./lab release
+./lab up
+./lab health
+```
+
+This is not the current source-build procedure. With the bundled null manifest,
+`./lab release` intentionally fails even if a local source-built VM exists;
+omit it from the current workflow. Do not remove the guard or invent a release.
 
 If a release has no separately reviewed builder, rebuilding fails with an
 explicit instruction rather than silently compiling a different environment.
@@ -161,7 +193,8 @@ Remaining gates are tracked in [image distribution](image-distribution.md):
 current immutable-image re-scan, corresponding sources/notices, native/eBPF
 coverage, privacy and key-origin review, independent runtime/builder approval,
 signing, and explicit publication authority. Registry publishing automation
-remains pending until those gates and the destination repository are settled.
+remains pending until those gates and the image-package destination are approved.
+The source repository is already public; that does not approve registry packages.
 No workflow added here has package-write permission or registry credentials.
 After publication, test an empty-image-cache VM on the same physical host,
 then edit/rebuild/rollback one component and rerun the packet suite. Offline

@@ -13,7 +13,27 @@ See [MUP Architecture Draft §3–4.1](https://datatracker.ietf.org/doc/html/dra
 Configuration keys, Compose/API IDs `tpe`/`npe`, VM names `lab-tpe`/`lab-npe`,
 and existing command/environment-variable names remain unchanged for compatibility.
 
-## Roles
+## Deployment profiles
+
+The control-plane sequence and logical packet paths below are shared by two
+deployment profiles. The `lab-*` names identify VMs only in the six-VM reference;
+the compact profile places the corresponding roles in containers inside one VM.
+Neither profile deploys the lab directly into the physical host's Docker daemon.
+
+| Aspect | Six-VM reference | Experimental single-VM compact profile |
+|---|---|---|
+| Placement | Six KVM/libvirt guests; free5GC Compose in the core guest | One KVM/libvirt guest; Compose for the core, observer, controller, PEs, RAN and DN |
+| Provisioning and configuration | Ansible; complete `config/lab.local.yml` | `./lab`; partial `config/compact.local.yml` overrides |
+| PE data interfaces | virtio NICs, driver-mode XDP | veth interfaces, generic XDP; no performance-equivalence claim |
+| Dashboard | Host collector/web service, port `8787` | Guest collector/web container, host SSH tunnel on port `8788` |
+| Setup and tests | [Reference operations](operations.md) | [Compact setup](compact-lab.md) and [hands-on](hands-on.md); initial `./lab up --build` |
+
+Do not apply reference-only commands, interface names or XDP-mode checks to a
+compact deployment. Source is public; prebuilt image distribution remains pending.
+
+<a id="roles"></a>
+
+## Logical roles and reference VM names
 
 - `lab-core`: free5GC control plane and ordinary UPF. `pfcp-observer` passively
   reads bidirectional N4 traffic from Docker bridge `br-free5gc`; it does not
@@ -80,6 +100,11 @@ DN -> route 10.60.0.0/16 via MUP PE (N6/Direct side)
 -> GTP-U -> gNB -> UE
 ```
 
+The downlink source shown here is the locator-derived address observed in the
+[reviewed capture](../examples/pcap/one-call/README.md), not the configured
+conditional source-embedding prefix. See the [address-plan explanation](address-plan.md)
+for that distinction and the fixed reconstructed GTP-U source.
+
 If T1 is absent, the MUP PE (N6/Direct side)'s kernel route sends the UE prefix to ordinary UPF
 `10.210.6.10`. Thus route withdrawal restores the original free5GC data path
 without changing the PFCP session.
@@ -95,14 +120,16 @@ without changing the PFCP session.
   for the life of the MUP-C process.
 - Vinbero and MUP-C APIs bind only to lab/loopback addresses; no MUP service is
   exposed on the physical LAN.
-- PE packet programs attach in XDP driver mode. This is required on the lab's
-  virtio NICs so cross-interface redirects are flushed to the egress device.
+- The six-VM reference attaches PE packet programs in XDP driver mode on virtio
+  NICs so cross-interface redirects are flushed to the egress device. The compact
+  profile instead uses generic XDP on its container veth interfaces.
 
 ## Observability plane
 
-`mup-dashboard` runs on the virtualization host and is deliberately outside the
-MUP control path. Every five seconds it collects configuration state and sends
-one active U-Plane ICMP probe:
+In both profiles the dashboard is outside the MUP control path. The following
+placement and SSH/systemd collection diagram describes the **six-VM reference**:
+`mup-dashboard` runs on the virtualization host, collecting state and sending
+one active U-Plane ICMP probe every five seconds.
 
 ```text
 MUP-C Connect API ── status + controlled PFCP sessions ──┐
@@ -115,11 +142,20 @@ UE uesimtun0 ─────── ICMP echo to DN 10.210.6.15 ─────�
                                      loopback + tailscale0 HTTP dashboard
 ```
 
+In the **compact profile**, a guest-side collector reads controller/PE state and
+container health, writes a JSON snapshot, and runs the periodic UE probe. A
+separate unprivileged web container serves the snapshot over a Unix socket;
+the host exposes it through a supervised SSH tunnel, on loopback by default and
+optionally Tailnet. The web container has no Docker socket or lab-network access.
+Packet-evidence tests exclude the periodic probe to avoid contaminating captures.
+See [compact dashboard operation](compact-lab.md) and [hands-on checks](hands-on.md).
+
 The UI derives the highlighted MUP path only when the observer lease is valid,
 at least one controlled session is advertised, and the T1/T2 route pair is
 present. Otherwise it highlights the ordinary UPF fallback path. A successful
 probe animates its request and reply on that path and reports the RTT; a timeout
 marks the U-Plane red. Collection does not call `suppress`, `resume`,
 `reconcile`, or any Vinbero mutation API.
-VM or service failures remain visible in the most recent snapshot rather than
-making the dashboard process disappear.
+Treat stale or unavailable snapshots as a monitoring failure, never as a healthy
+lab. In the reference profile the host collector can report unreachable guests;
+the compact dashboard depends on its guest and tunnel remaining available.
