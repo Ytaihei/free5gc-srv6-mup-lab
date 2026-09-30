@@ -2,9 +2,11 @@
 
 English | [日本語](feature-status.ja.md)
 
-Reviewed: 2026-09-15. This is a manually reviewed snapshot of the tracked lab
-profile and recorded evidence, not live dashboard state. Adding this document
-did not rerun the privileged forwarding tests. The [validation summary](validation-summary.md)
+Documentation reconciled: 2026-10-01. The reference-profile evidence was first
+summarized on 2026-09-15; compact-profile additions below summarize later dated
+records. This is a manually reviewed snapshot of code and recorded evidence,
+not live dashboard state. This documentation update did not rerun privileged
+forwarding tests. The [validation summary](validation-summary.md)
 describes historical runs; the [glossary](glossary.md) explains the terms below.
 
 ## How to read the two status columns
@@ -23,12 +25,18 @@ Implementation and verification are independent:
 | Offline tests only | Matching automated source, unit or packaging checks exist, without a corresponding live claim for this row |
 | Unverified | No matching evidence is recorded for the complete stated scenario; this is not synonymous with absent code |
 
-The supported baseline is six x86-64 KVM guests on one Ubuntu 24.04 host,
+The reference baseline is six x86-64 KVM guests on one Ubuntu 24.04 host,
 one IPv4 UE, an N3 Interwork attachment and an N6 Direct Segment. Session
 routes use AFI 1 / SAFI 85, exact 32-bit TEIDs and a fixed SID argument layout.
 The exact draft revisions and claim levels remain in [research scope](research-scope.md).
 All extensions in [the research backlog](research-backlog.md) remain pending;
 this table neither starts them nor promises delivery dates.
+
+Rows CP-01 through O-09 retain the reference evidence and shared protocol
+boundaries. They do not describe every compact implementation detail: the
+experimental single-VM profile uses generic XDP, container services and a
+guest-side dashboard collector. Its additional code and recorded checks are
+listed separately below. See the [deployment comparison](architecture.md#deployment-profiles).
 
 ## Control plane
 
@@ -81,6 +89,25 @@ this table neither starts them nor promises delivery dates.
 | O-07 | Persistent session/suppression state and replicated controller HA | Not implemented | Unverified | [Controller state](../internal/controller/controller.go) is in memory. Operator suppression survives snapshots only within that process lifetime; fresh observation is not persistent replicated state |
 | O-08 | Comprehensive resource limits and operational fault hardening | Partial | Unverified | [Server setup](../cmd/mup-controller/main.go) has basic protections such as a header timeout; [pending hardening](research-backlog.md) is not a completed quota, overload or deployment-wide security verification program |
 | O-09 | Public-source inventory, bilingual docs and reviewed capture gates | Implemented | Offline tests only | [Export checks](../scripts/export-source.py), [documentation tests](../tests/test_documentation.py), [capture tests](../tests/test_reviewed_pcaps.py), [distribution procedure](source-distribution.md). These validate the source candidate, not a public release, complete dependency security or live packet forwarding |
+
+## Compact profile additions
+
+These rows describe source-built compact deployments, not distributed images.
+Recorded successes on the same physical host do not establish independent
+physical-host reproduction. The managed PE restart in V-10 does not complete
+V-04: independent MUP-C/PE daemon restart coverage and quantified loss remain
+unverified. The published PCAPs in V-06 are reference-profile examples, not new
+compact captures.
+
+| ID | Capability | Implementation | Verification | Evidence and boundary |
+|---|---|---|---|---|
+| O-10 | Single-VM source build and restart with retained local images | Implemented | Recorded lab test | [Launcher](../scripts/compact_lab.py), [runtime](../scripts/compact_runtime.py), [recorded results](validation-summary.md). Initial `./lab up --build`, one KVM guest and Compose; not a native macOS or bare-host Compose deployment |
+| O-11 | Component source editing, rebuild and image rollback | Implemented | Recorded lab test | [Development implementation](../scripts/compact_develop.py), [workflow](prebuilt-development.md), [recorded results](validation-summary.md). Recorded dashboard, SMF and MUP-C cases; not every component/update combination. Rollback restores image selection, not source edits or database writes |
+| O-12 | Explicit MongoDB migration and recovery controls | Implemented | Recorded lab test | [Database implementation](../scripts/compact_database.py), [migration evidence](database-migration.md). Recorded 4.4-to-8.0 migration and application checks; fresh 8.0 requires guest AVX. Existing volumes are not silently upgraded; not a general backup or downgrade guarantee |
+| O-13 | Reviewed prebuilt-image deployment and distribution | Partial | Unverified | [Release loader](../scripts/compact_release.py), [distribution blockers](image-distribution.md). Acquisition/identity checks exist, but the bundled manifest is null, no release images are distributed, and the explicit-release dashboard socket-access defect remains unresolved |
+| V-09 | Compact registration, SRv6 path and ordinary-UPF comparison | Implemented | Recorded lab test | [Runtime tests](../scripts/compact_runtime.py), [packet evidence](../scripts/compact_evidence.py), [recorded results](validation-summary.md). One IPv4 UE, ICMP/HTTP and correlated captures; baseline and MUP tests compare route suppression/resumption, not simultaneous multi-UE cohorts |
+| V-10 | Compact lease, managed PE restart, network and neighbor recovery | Implemented | Recorded lab test | [Recovery implementation](../scripts/compact_recovery.py), [recorded results](validation-summary.md). Managed container restart/recreation and recovery checks; not controller HA, independent-daemon fault coverage or measured zero-loss recovery |
+| V-11 | Compact snapshot dashboard and host tunnel | Implemented | Recorded lab test | [Collector](../scripts/compact_collector.py), [tunnel](../scripts/compact_dashboard.py), [dated setup evidence](compact-lab.md). Source-built HTTP/API and probe checks; not completion of visual acceptance or the blocked prebuilt-release path. The web container is separate from the collector |
 
 ## Updating this document
 

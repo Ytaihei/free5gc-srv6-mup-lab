@@ -21,8 +21,16 @@ For a single-VM setup with component-level customization, start with the
 [compact setup guide](docs/compact-lab.md) and
 [prebuilt/development workflow](docs/prebuilt-development.md).
 The source-build path works today; prebuilt distribution remains gated by image review.
+Fresh compact databases require an AVX-capable CPU exposed to the guest;
+Ubuntu 24.04 x86-64 and KVM alone are not sufficient. The current `./lab doctor`
+does not check AVX. See the [database prerequisites](docs/database-migration.md).
 
 ## Architecture
+
+The logical roles are shared by both profiles; `lab-*` labels in the diagram
+are VM names in the six-VM reference, not additional VMs in the compact profile.
+The [deployment comparison](docs/architecture.md#deployment-profiles) explains placement,
+configuration and dashboard differences.
 
 Both packet edges are **MUP PEs**: **MUP PE (N3/Interwork side)** and
 **MUP PE (N6/Direct side)**. The compatible internal IDs remain `tpe` and `npe`
@@ -65,12 +73,14 @@ RDs, RTs, locators, and SIDs.
 
 ## Implemented components
 
-- Six non-autostart libvirt VMs and isolated user-plane networks
+- Six non-autostart libvirt VMs in the reference profile, or one non-autostart
+  VM with Compose in the experimental compact profile; isolated user-plane networks in both
 - free5GC v4.2.3 with gtp5g v0.9.5 and UERANSIM v3.3.0
 - Passive PFCP session reconstruction on `br-free5gc`
 - Policy-driven MUP-C, GoBGP v4.9.0, Connect RPC, and `mupctl`
 - Vinbero v0.1.1 patched to use upstream GoBGP v4.8
-- Vinbero driver-mode XDP on the virtio PE interfaces, with patched eBPF objects regenerated during provisioning
+- Vinbero driver-mode XDP on reference virtio PE interfaces, or generic XDP on
+  compact veth interfaces; patched eBPF objects regenerated during provisioning
 - Paired T1/T2 advertisement with local rollback on partial failure, and
   15-second observer lease withdrawal; not simultaneous atomic installation on both PEs
 - MUP PE (N3/Interwork side) `End.M.GTP4.E`, MUP PE (N6/Direct side) `End.DT4`, ISD/DSD resolution, and direct/fallback paths
@@ -80,11 +90,16 @@ RDs, RTs, locators, and SIDs.
   routes, service health, Vinbero XDP counters, and a five-second UE-to-DN ICMP
   probe
 
-Ansible deploys the `vinbero_pe` role. Migration guards disable old VPP/sidecar
+In the six-VM reference, Ansible deploys the `vinbero_pe` role. Migration guards disable old VPP/sidecar
 services on reused guests without removing their packages; that legacy source
 is not part of the public distribution.
 
-## Lifecycle
+<a id="lifecycle"></a>
+
+## Six-VM reference lifecycle
+
+This section is reference-only. Use the [compact hands-on](docs/hands-on.md)
+for the single-VM lifecycle; do not mix the two command sets or local configurations.
 
 Host and network settings are centralized in `config/lab.example.yml`.
 Copy it to ignored `config/lab.local.yml` for another machine. Read
@@ -119,7 +134,13 @@ mupctl resume <session-key>
 mupctl reconcile
 ```
 
-## Live dashboard
+<a id="live-dashboard"></a>
+
+## Six-VM reference dashboard
+
+This section describes the reference dashboard on port `8787`. The compact
+profile uses a guest-side collector/web container and a host SSH tunnel on
+port `8788`; follow the [hands-on guide](docs/hands-on.md) for its startup and tests.
 
 The dashboard is installed as a user service and refreshes the lab state every
 five seconds. It is available locally and, when `tailscale0` exists, across the

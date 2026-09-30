@@ -5,15 +5,15 @@
       "source": "docs/hands-on.md",
       "translation": "docs/hands-on.ja.md",
       "kind": "markdown",
-      "source_sha256": "3f0b2abc791c2147ddc3709d2cee1aeb808acfd955e1c10217a1fbf09c60d290",
-      "translation_sha256": "cebb41c15988a04d5d70628cff6e6fb3e973fc125b97a9be7d3f38fccb7c2d51"
+      "source_sha256": "47184d823271a52832660f0a6b8f8b1e4c7cb40c3d153e7c01df32950b3f2c2a",
+      "translation_sha256": "39437caf2a6cc58965b45bd9e0545fea91319081b849ec5eabb6ede10a4ad53e"
     },
     {
       "source": "docs/prebuilt-development.md",
       "translation": "docs/prebuilt-development.ja.md",
       "kind": "markdown",
-      "source_sha256": "0998745636ba628c80b3e6ace453f78067d60402012502f37f454774d81be0fb",
-      "translation_sha256": "d7c105bceaaba83f1c90b9100ee0fb9dc3fcd7a2541ed9e82c860738540235da"
+      "source_sha256": "bc797b553094d43012f1323115f479ee26cdc0e743d21dfd751ce3dc9fcb5c72",
+      "translation_sha256": "c576e3ff79a161d0bd1112d102d193583749edbca74d97faa101a43f44c8f723"
     },
     {
       "source": "docs/database-migration.md",
@@ -33,8 +33,8 @@
       "source": "docs/compact-lab.md",
       "translation": "docs/compact-lab.ja.md",
       "kind": "markdown",
-      "source_sha256": "524368ead03cc51fa9249f8fb3d3e7cb6253df13629f35aa39fb8597e2a56c1c",
-      "translation_sha256": "c42efe26e01def0a1e2c84be27e9a22342092646e3627a1c37d9fd0e8374d96c"
+      "source_sha256": "7716fbc372c0cc54b1a6e2a097e55fab893907b8f3d09c38dc0cafcd1c6476e5",
+      "translation_sha256": "d94adf8b979253b9230303ee498b29a219cdc2b8fa3c4ae910e465b32deeba05"
     },
     {
       "source": ".github/PULL_REQUEST_TEMPLATE.md",
@@ -47,15 +47,15 @@
       "source": "CONTRIBUTING.md",
       "translation": "CONTRIBUTING.ja.md",
       "kind": "markdown",
-      "source_sha256": "0a6cbb449f6ecf84c21fcd8e3bdd2a2252bc35a8025b51714c346b0cf830166f",
-      "translation_sha256": "fd9f3aab9e0e6e8dc97850cbb6827af7e0f00b04b19925e3e23cf298db8a0e11"
+      "source_sha256": "edf75ff5e70d2b1f55439f4347aca182815cbc64772304d7aca084dff27096d8",
+      "translation_sha256": "cd7d02653d5ceb408117a488bf43fa76bab619861538325c879f11aedb1802d5"
     },
     {
       "source": "README.md",
       "translation": "README.ja.md",
       "kind": "markdown",
-      "source_sha256": "d39891d96ac3f8b3f990de18166f31a66cfb71988236a6753003fecff65a35cf",
-      "translation_sha256": "5caa3bf4aeef77ded134d4c6080525e0666a17d5a0069360b6f25fa7b5436c61"
+      "source_sha256": "a9dcf3151bd44b2fa8eb396d4be4a10a0191deb68585c0d42bb196d1eb28c499",
+      "translation_sha256": "dd95cd86b2e31d33529487b1225a88d6185890395ea5afd1cd73042a94e6d248"
     },
     {
       "source": "SECURITY.md",
@@ -75,36 +75,36 @@
       "source": "docs/address-plan.md",
       "translation": "docs/address-plan.ja.md",
       "kind": "markdown",
-      "source_sha256": "e492851b013e01da3805efc7ad2690402c510a7642f5420dc98422cbb470004d",
-      "translation_sha256": "702adb65fc7032d35b750780252ca3980078b312ce8cd5ad203723da2813af43"
+      "source_sha256": "5adfdb1e1c13fe5986218ca5f410b0da3036b0d0386f6ca6e5f4e003a61eb94c",
+      "translation_sha256": "c7eae2dc4f3ee76dd4b512997be84cfcdfb74eecbacfb693ef5e1fcd0e70e28a"
     },
     {
       "source": "docs/architecture.md",
       "translation": "docs/architecture.ja.md",
       "kind": "markdown",
-      "source_sha256": "02e433ce003d10716ca74d726f37b8154a9b17dc89639590b680a32c5e892bc3",
-      "translation_sha256": "977643ae823c1d2dccfff5463148eff60317ac70569ada186c51bc2a42965122"
+      "source_sha256": "092069e9f5ce696a40648d8272917b6a9f39adeef910215cdfa456716973df32",
+      "translation_sha256": "aa0092c27ae988167cf0ab5edb563d61e9ad1c4ed0b677524023b56e21987f5b"
     },
     {
       "source": "docs/clean-room-reproduction.md",
       "translation": "docs/clean-room-reproduction.ja.md",
       "kind": "markdown",
-      "source_sha256": "c4314016e5ef7d5efe38ffc13f77e0748a2c50f0c7d5af56c8c54f0fc5d67016",
-      "translation_sha256": "6c3cb07aea0bab95e849940f02e8c97d9f4586cd8296a835c3755e630621fb61"
+      "source_sha256": "5b89dcf34d8837a458234beb428392bb17662a0fe51b1695d44b23cb3ee5d668",
+      "translation_sha256": "08eab88540aba97a784ff8704a7857ff3803208c00913e6991586ff30d856c2d"
     },
     {
       "source": "docs/operations.md",
       "translation": "docs/operations.ja.md",
       "kind": "markdown",
-      "source_sha256": "2a83f1cfc33eaa9f7b1d938fadbf65f5ea671c75da353e26908a8f0d95b6d2a1",
-      "translation_sha256": "eeb13c06edf1491718997d5a3eecf9624c2d9ade9e98dc215923bf21a7601202"
+      "source_sha256": "9eada38feb415f70f407f867614e8710df4bb774f167d6119ff6f18ef485e0ad",
+      "translation_sha256": "2d5d378128c5ae93739823cadab86dc066a965899ba245b642572bd9fb09ed2d"
     },
     {
       "source": "docs/portable-configuration.md",
       "translation": "docs/portable-configuration.ja.md",
       "kind": "markdown",
-      "source_sha256": "a3fe5c0aef4753cb0b323b3d48918e40e7568ca106601f7592b3be957960b523",
-      "translation_sha256": "4552d40df555ce3402956cf50a24ad27d2f24d1f61afcfe2e0eac59e759f23e5"
+      "source_sha256": "261f731ff68acae9047849fd2afbe6145fc0e76a2e34f45729bc4c713d93da16",
+      "translation_sha256": "cfda7bd1621bf9b6862073877f569e902fc1cc33e489bd1d21ac931202453401"
     },
     {
       "source": "docs/research-backlog.md",
@@ -138,8 +138,8 @@
       "source": "docs/validation-summary.md",
       "translation": "docs/validation-summary.ja.md",
       "kind": "markdown",
-      "source_sha256": "789cd5286691ec687ab29c9f7a55587c5415c4df64a7aa12b03eeb8b08d2ff74",
-      "translation_sha256": "cbebbdfe7404c3582c396d456f2a28277cc6a2cb317471f460d0b015f67529f4"
+      "source_sha256": "dbe40c3c1b1068d7ae17044cdad51940396267b647a8ff3b8ba9edf6fde6dbef",
+      "translation_sha256": "ccb81cdb635ed8df89d187264db2b9e05a4c3e1680c7b83fe66de465608b4e4f"
     },
     {
       "source": "third_party/vinbero/README.md",
@@ -166,8 +166,8 @@
       "source": "docs/publication-checklist.md",
       "translation": "docs/publication-checklist.ja.md",
       "kind": "markdown",
-      "source_sha256": "a684371a50a07f993b325b2c71a6c36d173fed099c1b0c9fc5c2009ef69a1fe8",
-      "translation_sha256": "8eff22866592d0a9bb5a72949fd5eba51e9946e907861500738a4a9f276e6eb3"
+      "source_sha256": "45bc38874caa7462ab56bc60404bba320e82da1ef8ed9952176e32cc5e03acd6",
+      "translation_sha256": "1bae9122ade73dab518d99caa76cb39b4b648d37edb2e0642493c83623bbd45a"
     },
     {
       "source": "examples/pcap/one-call/README.md",
@@ -180,15 +180,15 @@
       "source": "docs/feature-status.md",
       "translation": "docs/feature-status.ja.md",
       "kind": "markdown",
-      "source_sha256": "af1a7bb3a66d61981e666a8c437c51c94c35f6375955b7fdb1a756fc9e44d651",
-      "translation_sha256": "5a4b87c4af8a521a29d693b18e57c2e8834e38a72258d49d2ba0ac7e6afe320c"
+      "source_sha256": "d9754216d3013de6573148c877fd88faabe026865dd76599304edabdc7924a86",
+      "translation_sha256": "b723c12b632a6802da58653f91209fc88c457b0c85c93ceae540a1bd629e2414"
     },
     {
       "source": "docs/glossary.md",
       "translation": "docs/glossary.ja.md",
       "kind": "markdown",
-      "source_sha256": "59ee65b91a180c926475be7826447f3b83479c06da14d063fdf1a31001ece4c4",
-      "translation_sha256": "f52a76c3ec4e35155310820d24b1f364b46a4372051a4bc3d4a46cc263136a16"
+      "source_sha256": "ac2ed088eb9d561a9f714fa7fe3a4da1e89ce6eb566fca20010a092f09786d84",
+      "translation_sha256": "a0ecd19437b46eeb226edc05812fa4a7b8cc1657bbbe54fc044fa6880efdc205"
     }
   ]
 }

@@ -2,6 +2,12 @@
 
 English | [日本語](clean-room-reproduction.ja.md)
 
+This procedure reproduces the **six-VM reference** inside a nested-KVM parent;
+it is not the single-VM compact setup. Use [compact setup](compact-lab.md) and
+[its recorded checkpoints](validation-summary.md) for that profile. A second
+physical-host run remains unverified and outside the agreed acceptance scope,
+not an outstanding mandatory source-publication gate.
+
 This optional test uses a clean Ubuntu L1 host on the original x86-64 physical
 machine, and recreates all six lab guests at L2. It proves recovery from
 reviewed source on a clean OS, **not** portability to another physical CPU

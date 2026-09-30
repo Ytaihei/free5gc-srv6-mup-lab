@@ -6,11 +6,20 @@
 
 目的を絞ったブランチを作り、機能変更と生成ファイル・依存関係ロック・文書のみの変更を区別してください。PR作成前に次を実行します。
 
+これらのリポジトリ検査には、ホスト上のGo、Ansible、Python YAML/Jinja2、Makeが必要です。`./lab deps`は単一VMの配備準備であり、開発者向けツール全体を導入するものではありません。[ホスト準備](docs/operations.ja.md)と[検査範囲](docs/supply-chain.ja.md)を参照してください。オフライン検査のためだけに6VMを配備する必要はありません。
+
     make check
     ansible-playbook -i ansible/inventory/lab-inventory ansible/site.yml --syntax-check
     git diff --check
 
-E2E試験はラボUEの状態を変更し、構築済みの6 VMを必要とします。次のうち実行したものをPRに記載してください。
+E2E試験はラボUEの通信を中断します。所有する配備構成のコマンドを選び、順番に実行し、構成と実施した試験をPRに記載してください。文書の検査だけでは転送試験を再実施したことにはなりません。
+
+**単一VMコンパクト構成**は[ハンズオン](docs/hands-on.ja.md)を参照してください。作成に使ったチェックアウトとプロファイルを使用し、明示的な設定は毎回サブコマンドの前に`./lab --config /absolute/profile.yml`で指定します。既定プロファイルでは次を使います。
+
+    ./lab health
+    ./lab test all
+
+**6VM参照構成**では構築済みのゲスト6台が必要です。
 
     make test-baseline
     MUP_ENABLE=1 make test-mup

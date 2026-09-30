@@ -15,6 +15,9 @@ purpose, expected result, dashboard behavior and recovery guidance.
 - Run host commands on Ubuntu 24.04 x86-64 with KVM and a working systemd user
   session. A Mac can be an SSH/browser client, not the native lab host. Commands
   marked as container commands run only after entering the indicated container.
+- Fresh compact databases use MongoDB 8.0 and require AVX exposed to the guest
+  CPU. The current `./lab doctor` does not check AVX; a pass alone does not
+  establish this prerequisite. See [database requirements](database-migration.md).
 - Source is public, but release images are not distributed. Initial construction
   uses `./lab up --build`. The default VM has 4 vCPUs, 8 GiB RAM and an 80 GiB
   thin-provisioned disk; these are tested settings, not proven minimums. Leave

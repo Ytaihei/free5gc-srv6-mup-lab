@@ -46,7 +46,7 @@ PFCPの実装範囲は[パッシブ状態リーダー](../internal/pfcpstate/sta
 | 用語 | 意味 | このラボでの使い方 |
 |---|---|---|
 | MUP / SRv6 MUP | Mobile User Planeアーキテクチャ / SRv6で実現したデータプレーン | セッション状態を経路情報へ変換。対応プロファイルはIPv4 UEとDirect Segment |
-| MUP-C | MUPコントローラー | `lab-mupc` がポリシーを適用しセッション経路を生成。observerは `lab-core` に分離配置 |
+| MUP-C | MUPコントローラー | ポリシーを適用してセッション経路を生成。参照構成は`lab-mupc`と`lab-core`内のobserver、単一VM構成は同じVM内の別サービス`mupc`と`observer` |
 | MUP PE | MUP対応Provider Edge | 両方のVinberoノードがMUP PE。MUP PE（N3／Interwork側）のIDは `tpe`、MUP PE（N6／Direct側）のIDは `npe` |
 | T-PE / N-PE | 旧来のラボ内の別名で、MUP仕様の用語ではない | 説明には上記のMUP PE表記を使う。`tpe`／`npe` と `lab-tpe`／`lab-npe` は設定・API・CLI・VMの互換識別名としてのみ保持 |
 | MUP-GW | 初期のMUP Draftにある歴史的なゲートウェイ名称 | N3側の現在の表示名には使わず、MUP PE（N3／Interwork側）とする。別のSMFやPFCP終端ではない |
@@ -84,7 +84,7 @@ Architecture Type 1（3GPP-5G）は別フィールドです。T1のRoute Typeは
 | End.DT4 / VRF | IPv4の脱カプセル化後に指定テーブルで検索する動作 / 経路制御のコンテキスト | MUP PE（N6／Direct側）は上りを脱カプセル化し、テナントの経路テーブル100へ渡す |
 | End.M.GTP4.E | IPv4 GTP-Uを出力するモバイル動作 | MUP PE（N3／Interwork側）がgNBへの下りGTP-Uを再構成。上りのカプセル化動作ではない |
 | Args.Mob.Session | SID配置に載せるモバイルセッション引数 | 配備プロファイルのオフセットは固定。任意のSID配置を扱う汎用デコーダーではない |
-| eBPF / XDP | カーネル内のプログラム・マップ / 受信経路の早い段階での処理 | PEのvirtioインターフェースでVinberoがdriver-mode XDPを使用 |
+| eBPF / XDP | カーネル内のプログラム・マップ / 受信経路の早い段階での処理 | Vinberoは参照構成のPEのvirtioでdriver-mode XDP、単一VM構成のvethでgeneric XDPを使用 |
 | Fallback | 選択MUPエントリーが適用されない場合の通常UPF転送 | 元のUPFセッションとカーネル経路が有効であることが前提。無損失の保証ではない |
 
 ヘッダー、ネットワークプログラミング、モバイル動作の定義は、それぞれ [RFC 8754](https://www.rfc-editor.org/rfc/rfc8754.html)、[RFC 8986](https://www.rfc-editor.org/rfc/rfc8986.html)、[RFC 9433](https://www.rfc-editor.org/rfc/rfc9433.html)を参照してください。実際のパケットの流れと固定配置は[アーキテクチャ](architecture.ja.md)と[アドレス計画](address-plan.ja.md)にあります。
@@ -93,7 +93,7 @@ Architecture Type 1（3GPP-5G）は別フィールドです。T1のRoute Typeは
 
 | 用語 | 意味 | このラボでの使い方 |
 |---|---|---|
-| free5gc-compose / UERANSIM | コンテナー化した5Gコア / UE・gNBの模擬実装 | Composeはcore VM内で動作。ラボ全体にはKVM/libvirtとAnsibleも必要 |
+| free5gc-compose / UERANSIM | コンテナー化した5Gコア / UE・gNBの模擬実装 | 参照構成はcore VM内でComposeを動かし、KVM/libvirtとAnsibleで6ゲストを配備。単一VM構成は1台のKVM/libvirtゲスト内にcoreなどの役割をComposeで配置し、`./lab`で管理 |
 | GoBGP / Vinbero | BGPライブラリ / eBPFを使うMUP SRv6実装 | controllerとPEで異なる版を意図的に固定。ライブラリ機能の存在はラボの対応保証ではない |
 | Connect RPC / mupctl | 型付きHTTP RPC / controllerのCLI | 状態読み取りと抑止操作は別。信頼する網への待ち受け限定はAPI認証ではない |
 | 1call / E2E | 本ラボの登録からデータ疎通までの単一試験 / エンドツーエンド試験 | PDU SessionとICMP/HTTPを含み、音声通話やIMS/VoNR試験ではない |
