@@ -1,12 +1,16 @@
 """Offline contract tests. These do not attest privileged installation or lab recovery."""
 import copy
+import contextlib
+import errno
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
+import io
 import os
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
+import socket
 import sys
 import tempfile
 import unittest
@@ -20,6 +24,213 @@ import background_executor as executor
 INSTALLER_SPEC = importlib.util.spec_from_file_location('background_installer', ROOT / 'scripts/install-background-development.py')
 installer = importlib.util.module_from_spec(INSTALLER_SPEC)
 INSTALLER_SPEC.loader.exec_module(installer)
+ADMIN_SPEC = importlib.util.spec_from_file_location('background_admin', ROOT / 'scripts/background-admin.py')
+admin = importlib.util.module_from_spec(ADMIN_SPEC)
+ADMIN_SPEC.loader.exec_module(admin)
+
+
+class IsolationProbeTests(unittest.TestCase):
+    def test_existing_masked_directory_is_denied(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'masked'
+            path.mkdir(mode=0o000)
+            try:
+                self.assertTrue(path.exists())
+                self.assertTrue(admin.directory_denied(path))
+            finally:
+                path.chmod(0o700)
+            self.assertFalse(admin.directory_denied(path))
+
+    def test_masked_socket_denied_but_live_socket_rejected(self):
+        with tempfile.TemporaryDirectory() as root, socket.socket(socket.AF_UNIX) as listener:
+            path = Path(root) / 'test.sock'
+            listener.bind(str(path))
+            listener.listen(1)
+            path.chmod(0o000)
+            try:
+                self.assertTrue(path.exists())
+                self.assertTrue(admin.socket_denied(str(path)))
+            finally:
+                path.chmod(0o600)
+            self.assertFalse(admin.socket_denied(str(path)))
+
+    def test_only_permission_denial_or_absent_socket_is_accepted(self):
+        for result in (0, errno.ECONNREFUSED, errno.ETIMEDOUT, errno.EIO,
+                       errno.EACCES, errno.EPERM, errno.ENOENT, errno.ENOTDIR):
+            with self.subTest(result=result), patch.object(admin.socket, 'socket') as mocked:
+                mocked.return_value.__enter__.return_value.connect_ex.return_value = result
+                self.assertEqual(admin.socket_denied('/test.sock'), result in (
+                    errno.EACCES, errno.EPERM, errno.ENOENT, errno.ENOTDIR))
+
+    def test_probe_keeps_network_gate_strict_and_names_failure(self):
+        for result in (errno.EACCES, errno.EPERM, errno.ECONNREFUSED, 0, errno.ETIMEDOUT):
+            with self.subTest(result=result), patch.object(admin.os, 'getuid', return_value=1000), \
+                    patch.object(admin.os, 'access', return_value=False), \
+                    patch.object(admin, 'directory_denied', return_value=True), \
+                    patch.object(admin, 'socket_denied', return_value=True), \
+                    patch.object(admin.socket, 'socket') as mocked, \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                mocked.return_value.__enter__.return_value.connect_ex.return_value = result
+                if result in (errno.EACCES, errno.EPERM):
+                    admin.isolation_probe()
+                else:
+                    with self.assertRaisesRegex(ValueError, 'private_network_denied'):
+                        admin.isolation_probe()
+                self.assertEqual(json.loads(output.getvalue())['network_errno'], result)
+
+
+class CommissioningTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.install = self.root / 'install'
+        self.install.mkdir()
+        self.store = bg.Store(self.root / 'state')
+        self.store.directory.mkdir(mode=0o700)
+        self.state = self.store.read()
+        self.state['paused'] = False
+        bg.atomic_json(self.install / 'operator.json', {
+            'commissioned': True, 'automatic_merge': True, 'model': 'retained-model'})
+        for attribute, value in [('INSTALL', self.install), ('STATE', self.store.directory)]:
+            mocked = patch.object(admin, attribute, value)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
+    def service(self, role, command, **kwargs):
+        Path(kwargs['output_file']).write_text('private diagnostic output\n')
+
+    def test_every_phase_has_retained_evidence_and_success_remains_paused(self):
+        with patch.object(admin, 'service', side_effect=self.service) as service:
+            admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
+        self.assertEqual(service.call_count, 4)
+        report = next((self.store.directory / 'commissioning').glob('*/result.json'))
+        self.assertTrue(json.loads(report.read_text())['complete'])
+        self.assertEqual(len(list(report.parent.glob('*.log'))), 4)
+        self.assertTrue(self.store.read()['paused'])
+        operator = json.loads((self.install / 'operator.json').read_text())
+        self.assertTrue(operator['commissioned'])
+        self.assertFalse(operator['automatic_merge'])
+        self.assertEqual(operator['model'], 'retained-model')
+
+    def test_failed_probe_revokes_previous_acceptance_and_retains_log(self):
+        def fail(role, command, **kwargs):
+            self.service(role, command, **kwargs)
+            if 'probe-isolation' in command:
+                raise ValueError('probe failed')
+        with patch.object(admin, 'service', side_effect=fail) as service:
+            with self.assertRaisesRegex(ValueError, 'isolation-probe failed; inspect private log'):
+                admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
+        self.assertEqual(service.call_count, 3)
+        report = next((self.store.directory / 'commissioning').glob('*/result.json'))
+        self.assertEqual(json.loads(report.read_text())['phases']['isolation-probe'], 'failed')
+        self.assertTrue((report.parent / 'isolation-probe.log').exists())
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+        self.assertTrue(self.store.read()['paused'])
+
+
+class CoordinatorUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.source, self.install = self.root / 'source', self.root / 'install'
+        self.store = bg.Store(self.root / 'state')
+        self.store.directory.mkdir(mode=0o700)
+        self.files = ['scripts/background-admin.py', 'config/background-development.yml', 'config/public-source.json']
+        for directory in (self.source, self.install):
+            (directory / 'scripts').mkdir(parents=True)
+            (directory / 'config').mkdir()
+            (directory / 'scripts/background-admin.py').write_text('old source\n')
+            (directory / 'config/background-development.yml').write_text('unchanged policy\n')
+            (directory / 'config/public-source.json').write_text(json.dumps({'files': self.files}))
+        (self.install / 'bin').mkdir()
+        (self.install / 'bin/codex').write_text('retained tool\n')
+        (self.install / 'review-schema.json').write_text('{}')
+        manifest = {'version': 1, 'files': {name: bg.digest(self.install / name)
+                    for name in self.files + ['bin/codex', 'review-schema.json']}}
+        bg.atomic_json(self.install / 'installation.json', manifest)
+        bg.atomic_json(self.install / 'operator.json', {
+            'commissioned': True, 'automatic_merge': True, 'model': 'retained-model'})
+        state = self.store.read()
+        state['tasks'] = {'example': {'status': 'queued'}}
+        self.store.save(state)
+        (self.source / 'scripts/background-admin.py').write_text('fixed source\n')
+        for attribute, value in [('ROOT', self.source), ('INSTALL', self.install), ('STATE', self.store.directory)]:
+            mocked = patch.object(installer, attribute, value)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        protected = patch.object(installer, 'protected')
+        protected.start()
+        self.addCleanup(protected.stop)
+        command = patch.object(installer.subprocess, 'check_output', side_effect=lambda argv, **kwargs:
+                               'disabled\n' if '--property=UnitFileState' in argv else 'inactive\n')
+        self.command = command.start()
+        self.addCleanup(command.stop)
+
+    def test_repair_preserves_backup_tools_tasks_and_requires_recommission(self):
+        with patch.object(installer.subprocess, 'run') as run:
+            installer.update_coordinator()
+            run.assert_not_called()  # No apt, user creation, login or service start.
+        self.assertEqual((self.install / self.files[0]).read_text(), 'fixed source\n')
+        report = next((self.store.directory / 'updates').glob('*/installation.json'))
+        self.assertEqual((report.parent / self.files[0]).read_text(), 'old source\n')
+        manifest = json.loads((self.install / 'installation.json').read_text())
+        for name, digest in manifest['files'].items():
+            self.assertEqual(bg.digest(self.install / name), digest)
+        operator = json.loads((self.install / 'operator.json').read_text())
+        self.assertEqual(operator['model'], 'retained-model')
+        self.assertFalse(operator['commissioned'])
+        self.assertFalse(operator['automatic_merge'])
+        self.assertTrue(self.store.read()['paused'])
+        self.assertEqual(self.store.read()['tasks'], {'example': {'status': 'queued'}})
+
+    def test_changed_installed_file_refused_before_writes(self):
+        (self.install / self.files[0]).write_text('unexpected edit\n')
+        with self.assertRaisesRegex(ValueError, 'differ from their manifest'):
+            installer.update_coordinator()
+        self.assertFalse((self.store.directory / 'updates').exists())
+
+    def test_policy_changes_refused_before_writes(self):
+        (self.source / self.files[1]).write_text('unapproved policy\n')
+        with self.assertRaisesRegex(ValueError, 'cannot change policy'):
+            installer.update_coordinator()
+        self.assertEqual((self.install / self.files[0]).read_text(), 'old source\n')
+
+    def test_inventory_expansion_refused(self):
+        (self.source / self.files[2]).write_text(json.dumps({'files': self.files + ['new.py']}))
+        with self.assertRaisesRegex(ValueError, 'cannot add/remove inventory'):
+            installer.update_coordinator()
+
+    def test_active_timer_refused(self):
+        self.command.side_effect = lambda argv, **kwargs: 'active\n'
+        with self.assertRaisesRegex(ValueError, 'stop background services'):
+            installer.update_coordinator()
+
+    def test_enabled_timer_refused(self):
+        self.command.side_effect = lambda argv, **kwargs: 'enabled\n' if '--property=UnitFileState' in argv else 'inactive\n'
+        with self.assertRaisesRegex(ValueError, 'disable both timers'):
+            installer.update_coordinator()
+
+    def test_interrupted_run_refused(self):
+        state = self.store.read()
+        state['active'] = {'id': 'a' * 32}
+        self.store.save(state)
+        with self.assertRaisesRegex(ValueError, 'recover interrupted work'):
+            installer.update_coordinator()
+
+    def test_partial_update_retains_backup_and_cannot_remain_commissioned(self):
+        replace = os.replace
+        def fail(source, destination):
+            if Path(destination) == self.install / self.files[0]:
+                raise OSError('simulated update failure')
+            return replace(source, destination)
+        with patch.object(installer.os, 'replace', side_effect=fail):
+            with self.assertRaisesRegex(OSError, 'simulated update failure'):
+                installer.update_coordinator()
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+        self.assertTrue(list((self.store.directory / 'updates').glob('*/installation.json')))
+        self.assertTrue(self.store.read()['paused'])
 
 
 class InstallationTests(unittest.TestCase):
@@ -396,6 +607,26 @@ class SnapshotTests(unittest.TestCase):
 
 
 class ServiceBoundaryTests(unittest.TestCase):
+    def test_failure_evidence_is_private_and_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(executor.subprocess, 'run') as run:
+            log = Path(root) / 'phase.log'
+            run.return_value.returncode = 1
+            run.return_value.stdout = ''
+            with self.assertRaisesRegex(ValueError, 'private evidence retained'):
+                executor.service('checks', ['false'], output_file=log)
+            self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+            log.write_text('retained evidence')
+            with self.assertRaises(FileExistsError):
+                executor.service('checks', ['false'], output_file=log)
+            self.assertEqual(log.read_text(), 'retained evidence')
+
+    def test_failure_without_log_does_not_claim_evidence_was_saved(self):
+        with patch.object(executor.subprocess, 'run') as run:
+            run.return_value.returncode = 1
+            run.return_value.stdout = ''
+            with self.assertRaisesRegex(ValueError, 'output was not persisted'):
+                executor.service('checks', ['false'])
+
     def test_checker_has_no_credentials_or_host_sockets(self):
         with patch.object(executor.subprocess, 'run') as run:
             run.return_value.returncode = 0

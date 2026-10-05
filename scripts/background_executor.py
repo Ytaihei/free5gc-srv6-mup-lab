@@ -137,7 +137,8 @@ def service(role, argv, *, cwd=None, seconds=120, input_text=None, output_file=N
     env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
     try:
         if output_file:
-            with open(output_file, 'w', encoding='utf-8') as stream:
+            descriptor = os.open(output_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
                 result = subprocess.run(command, input=input_text, text=True, stdout=stream,
                                         stderr=stream, env=env, timeout=seconds + 30, check=False)
             output = ''
@@ -146,7 +147,8 @@ def service(role, argv, *, cwd=None, seconds=120, input_text=None, output_file=N
                                     env=env, timeout=seconds + 30, check=False)
             output = result.stdout
         if result.returncode:
-            raise ValueError('isolated ' + role + ' process failed; private evidence retained')
+            detail = '; private evidence retained' if output_file else '; output was not persisted'
+            raise ValueError('isolated ' + role + ' process failed' + detail)
         return output
     finally:
         # Covers client disconnect/timeouts; do not leave untrusted descendants.

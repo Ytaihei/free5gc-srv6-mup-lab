@@ -10,13 +10,99 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
+import uuid
 
-from background_development import ROOT, atomic_json, load_policy
-from background_executor import ACCOUNTS, HOMES, INSTALL, REVIEW_SCHEMA, STATE
+from background_development import ROOT, Store, atomic_json, digest, load_policy, safe_relative
+from background_executor import ACCOUNTS, HOMES, INSTALL, REVIEW_SCHEMA, STATE, protected
 
 UNITS = ('srv6-mup-background.service', 'srv6-mup-background.timer',
          'srv6-mup-background-watchdog.service', 'srv6-mup-background-watchdog.timer')
 UNIT_DIRECTORY = Path('/etc/systemd/system')
+COORDINATOR_UPDATE_PATHS = {
+    'scripts/background-admin.py', 'scripts/background_executor.py',
+    'scripts/install-background-development.py', 'tests/test_background_development.py',
+    'docs/background-development.md', 'docs/background-development.ja.md',
+    'config/documentation.json',
+}
+
+
+def update_coordinator():
+    """Explicit, narrow repair of a stopped installation; preserve auth and data."""
+    protected(INSTALL / 'installation.json')
+    protected(INSTALL / 'operator.json')
+    manifest = json.loads((INSTALL / 'installation.json').read_text())
+    inventory = json.loads((ROOT / 'config/public-source.json').read_text())['files']
+    if set(inventory) | {'bin/codex', 'review-schema.json'} != set(manifest['files']):
+        raise ValueError('coordinator repair cannot add/remove inventory or tools')
+    for name, expected in manifest['files'].items():
+        safe_relative(name)
+        protected(INSTALL / name)
+        if digest(INSTALL / name) != expected:
+            raise ValueError('installed files differ from their manifest; preserve and inspect them')
+    changes = {}
+    for name in inventory:
+        safe_relative(name)
+        source = ROOT / name
+        if source.is_symlink() or not source.is_file() or not source.resolve().is_relative_to(ROOT):
+            raise ValueError('unsafe source for coordinator repair')
+        payload = source.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != manifest['files'][name]:
+            if name not in COORDINATOR_UPDATE_PATHS:
+                raise ValueError('coordinator repair cannot change policy, dependencies, units or lab code')
+            changes[name] = payload
+    for name in UNITS:
+        active = subprocess.check_output(
+            ['systemctl', 'show', name, '--property=ActiveState', '--value'], text=True).strip()
+        if active not in ('inactive', 'failed'):
+            raise ValueError('stop background services and timers before coordinator repair')
+        if name.endswith('.timer'):
+            enabled = subprocess.check_output(
+                ['systemctl', 'show', name, '--property=UnitFileState', '--value'], text=True).strip()
+            if enabled != 'disabled':
+                raise ValueError('disable both timers before coordinator repair')
+    store = Store(STATE)
+    with store.locked():
+        state = store.read()
+        if state.get('active'):
+            raise ValueError('recover interrupted work before coordinator repair')
+        if not changes:
+            print('Coordinator source already matches; no files or state changed.')
+            return
+        parent = STATE / 'updates'
+        parent.mkdir(mode=0o700, exist_ok=True)
+        backup = parent / uuid.uuid4().hex
+        backup.mkdir(mode=0o700)
+        atomic_json(backup / 'installation.json', manifest)
+        operator = json.loads((INSTALL / 'operator.json').read_text())
+        atomic_json(backup / 'operator.json', operator)
+        for name in changes:
+            target = backup / name
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            target.write_bytes((INSTALL / name).read_bytes())
+            target.chmod(0o600)
+        state['paused'] = True
+        store.save(state)
+        operator.update({'commissioned': False, 'automatic_merge': False})
+        atomic_json(INSTALL / 'operator.json', operator)
+        print('Repair backup retained at ' + str(backup), flush=True)
+        for name, payload in changes.items():
+            target = INSTALL / name
+            descriptor, temporary = tempfile.mkstemp(prefix='.coordinator-update-', dir=target.parent)
+            try:
+                with os.fdopen(descriptor, 'wb') as stream:
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                    os.fchmod(stream.fileno(), target.stat().st_mode & 0o777)
+                os.replace(temporary, target)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+            manifest['files'][name] = hashlib.sha256(payload).hexdigest()
+        # A partial write keeps the old manifest and fails verification on resume.
+        atomic_json(INSTALL / 'installation.json', manifest)
+        print('Coordinator repaired. Authentication/state/evidence retained; recommission before resume.')
 
 
 def check_units(adopt=False):
@@ -59,8 +145,20 @@ def main():
     parser.add_argument('--go-root', type=Path, help='existing pinned Go installation directory')
     parser.add_argument('--adopt-existing-units', action='store_true',
                         help='reuse exact protected templates after disabling their timers; never overwrite custom units')
+    parser.add_argument('--update-coordinator', action='store_true',
+                        help='repair only reviewed coordinator source; preserve accounts, credentials, tools and lab data')
     args = parser.parse_args()
     load_policy()
+    if args.update_coordinator:
+        if args.codex or args.go_root or args.adopt_existing_units:
+            raise ValueError('coordinator repair cannot be combined with installation options')
+        if not args.apply:
+            print('Preview: repair reviewed coordinator source with a private backup, then require recommissioning.')
+            return
+        if os.geteuid() != 0:
+            raise ValueError('--apply requires sudo; no password is read by this script')
+        update_coordinator()
+        return
     print('Install fixed coordinator under /opt/srv6-mup-background; private state under /var/lib.')
     print('Create isolated mup-bg-worker/checks/publisher accounts, without administrative groups.')
     print('Install git, curl, make, jq, gh, Python venv; create pinned Python environment.')
