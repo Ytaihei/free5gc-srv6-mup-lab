@@ -2,6 +2,20 @@
   "version": 1,
   "translations": [
     {
+      "source": "docs/background-development.md",
+      "translation": "docs/background-development.ja.md",
+      "kind": "markdown",
+      "source_sha256": "630e5655d0a67ec285edc7a5f73b783a682cf60923232226d8962083d03fa396",
+      "translation_sha256": "5241fc2c63b493cc325e9d68c16e294474532c7ab593b0629821874d68c193e9"
+    },
+    {
+      "source": "AGENTS.md",
+      "translation": "AGENTS.ja.md",
+      "kind": "markdown",
+      "source_sha256": "94773c4757a86ec2291857bc6150bf898a96e3d48e79e36ec39b80d527e90c0e",
+      "translation_sha256": "c394dda9eb29f80daccb72a4315c5f1c147f5ee687dcf16b14d5788c93295589"
+    },
+    {
       "source": "docs/hands-on.md",
       "translation": "docs/hands-on.ja.md",
       "kind": "markdown",
@@ -54,8 +68,8 @@
       "source": "README.md",
       "translation": "README.ja.md",
       "kind": "markdown",
-      "source_sha256": "a9dcf3151bd44b2fa8eb396d4be4a10a0191deb68585c0d42bb196d1eb28c499",
-      "translation_sha256": "dd95cd86b2e31d33529487b1225a88d6185890395ea5afd1cd73042a94e6d248"
+      "source_sha256": "21972cf11db67854bf39cc4202fe5978846f899ff827fe281edf115df5127b01",
+      "translation_sha256": "e680446dcd7d9b5c1db2e3bffabb3732ff66b2fa7cde4f7f5bfe2e44b65317a9"
     },
     {
       "source": "SECURITY.md",

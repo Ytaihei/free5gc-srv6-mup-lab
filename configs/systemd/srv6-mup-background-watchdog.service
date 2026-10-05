@@ -1,0 +1,9 @@
+[Unit]
+Description=Detect interrupted SRv6 MUP background runs
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/opt/srv6-mup-background/venv/bin/python3 /opt/srv6-mup-background/scripts/background-admin.py watchdog
+TimeoutStartSec=60

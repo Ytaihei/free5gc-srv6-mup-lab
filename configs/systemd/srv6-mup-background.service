@@ -1,0 +1,23 @@
+[Unit]
+Description=Bounded SRv6 MUP background developer (requires commissioning)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+WorkingDirectory=/opt/srv6-mup-background
+ExecStart=/opt/srv6-mup-background/venv/bin/python3 /opt/srv6-mup-background/scripts/background-development.py --state /var/lib/srv6-mup-background run
+ExecStopPost=/opt/srv6-mup-background/venv/bin/python3 /opt/srv6-mup-background/scripts/background-admin.py watchdog
+TimeoutStartSec=55min
+TimeoutStopSec=60
+KillMode=control-group
+Nice=10
+IOSchedulingClass=idle
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/srv6-mup-background /var/lib/mup-bg-worker /var/lib/mup-bg-checks /var/lib/mup-bg-publisher /opt/srv6-mup-background/candidates
+# Generated code never runs in this coordinator. Transient worker/check/publish
+# services use separate non-privileged accounts and additional restrictions.

@@ -1,0 +1,10 @@
+[Unit]
+Description=Independent background developer interruption check
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=srv6-mup-background-watchdog.service
+
+[Install]
+WantedBy=timers.target

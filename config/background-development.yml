@@ -1,0 +1,61 @@
+version: 1
+repository: Ytaihei/free5gc-srv6-mup-lab
+branch: main
+schedule:
+  timezone: Asia/Tokyo
+  weekdays: [0, 2, 4]
+  hour: 3
+  work_minutes: 40
+  recovery_minutes: 20
+limits:
+  open_prs: 3
+  changed_files: 10
+  changed_lines: 300
+  memory_available_mib: 8192
+  disk_free_gib: 30
+  consecutive_failures: 3
+required_checks: [test, gitleaks, source-and-binaries]
+lab_profiles: [compact, reference]
+tasks:
+  - id: documentation-maintenance
+    priority: 10
+    kind: maintenance
+    depends_on: []
+    paths: [docs/, README.md, README.ja.md]
+    acceptance: Repair an evidenced typo, broken link or translation mismatch without changing commands, safety guidance or claims of support. Preserve bilingual checks.
+    profiles: []
+  - id: pfcp-unit-coverage
+    priority: 20
+    kind: tests
+    depends_on: []
+    paths: [internal/pfcpstate/]
+    acceptance: Add independent tests of existing accepted/rejected PFCP transaction behavior. Do not remove or weaken any existing assertion or change production code.
+    profiles: []
+  - id: dependency-triage
+    priority: 30
+    kind: maintenance
+    depends_on: []
+    paths: [docs/]
+    acceptance: Review existing dependency PRs for compatibility and missing evidence. Report recommendations only; dependency changes require human review.
+    profiles: []
+  - id: convergence-measurement-design
+    priority: 40
+    kind: feature
+    depends_on: []
+    paths: [docs/]
+    acceptance: Define clock sources and independent PFCP-to-BGP, BGP-to-map and first-packet measurements. Do not claim measurements have been performed.
+    profiles: []
+  - id: convergence-measurement
+    priority: 50
+    kind: feature
+    depends_on: [convergence-measurement-design]
+    paths: [cmd/, internal/, scripts/, tests/, docs/]
+    acceptance: Implement the merged measurement design in a bounded increment, preserve forwarding and record missing live evidence explicitly.
+    profiles: [compact, reference]
+  - id: multi-ue-design
+    priority: 60
+    kind: feature
+    depends_on: [convergence-measurement]
+    paths: [docs/]
+    acceptance: Specify selected and unselected simultaneous UEs and isolation checks. IPv6, QFI extensions and image publication remain separate decisions.
+    profiles: []
