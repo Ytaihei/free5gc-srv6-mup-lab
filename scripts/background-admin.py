@@ -5,12 +5,13 @@ import errno
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import socket
 import sys
 import uuid
 
-from background_development import Store, atomic_json
+from background_development import Store, atomic_json, digest, safe_relative
 from background_executor import INSTALL, ROOT, STATE, protected, service, watchdog
 
 
@@ -35,6 +36,21 @@ def socket_denied(path):
     return result in (errno.EACCES, errno.EPERM, errno.ENOENT, errno.ENOTDIR)
 
 
+def private_network_errno():
+    """Observe a packet-filter denial directly, without TCP's SYN retries."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
+        connection.settimeout(2)
+        # Own the destination port: a failed filter must not contact a host daemon.
+        # Setup failures are not evidence of an egress denial.
+        connection.bind(('127.0.0.2', 0))
+        destination = connection.getsockname()
+        try:
+            connection.sendto(b'srv6-mup-isolation-probe', destination)
+        except OSError as error:
+            return error.errno
+    return 0
+
+
 def isolation_probe():
     checks = {
         'unprivileged': os.getuid() != 0,
@@ -45,17 +61,40 @@ def isolation_probe():
         'docker_socket_denied': socket_denied('/run/docker.sock'),
         'libvirt_socket_denied': socket_denied('/run/libvirt/libvirt-sock'),
     }
-    with socket.socket() as connection:
-        connection.settimeout(2)
-        try:
-            network_errno = connection.connect_ex(('127.0.0.2', 9))
-        except OSError as error:
-            network_errno = error.errno
+    network_errno = private_network_errno()
     checks['private_network_denied'] = network_errno in (errno.EACCES, errno.EPERM)
     # Fixed labels/booleans only: safe to inspect without disclosing credentials.
-    print(json.dumps({'checks': checks, 'network_errno': network_errno}), flush=True)
+    print(json.dumps({'checks': checks, 'network_probe': 'udp-self-send',
+                      'network_errno': network_errno}), flush=True)
     if not all(checks.values()):
         raise ValueError('isolation probe failed: ' + ', '.join(key for key, passed in checks.items() if not passed))
+
+
+def commissioning_source(destination):
+    """Freeze only verified public files, never installed tools/private state."""
+    protected(INSTALL / 'installation.json')
+    protected(INSTALL / 'config/public-source.json')
+    protected(destination.parent)
+    manifest = json.loads((INSTALL / 'installation.json').read_text())['files']
+    if digest(INSTALL / 'config/public-source.json') != manifest['config/public-source.json']:
+        raise ValueError('installed publication inventory changed')
+    inventory = json.loads((INSTALL / 'config/public-source.json').read_text())['files']
+    destination.mkdir(mode=0o755)  # Refuse reuse; keep failed snapshots as evidence.
+    destination.chmod(0o755)
+    for name in inventory:
+        relative = safe_relative(name)
+        source = INSTALL / name
+        protected(source)
+        directory = destination
+        for part in relative.parts[:-1]:
+            directory /= part
+            directory.mkdir(mode=0o755, exist_ok=True)
+            directory.chmod(0o755)
+        target = destination / name
+        shutil.copyfile(source, target)
+        target.chmod(0o755 if source.stat().st_mode & 0o111 else 0o644)
+        if digest(target) != manifest.get(name):
+            raise ValueError('commissioning source differs from installed manifest')
 
 
 def commission(store, state, author_name, author_email):
@@ -80,15 +119,24 @@ def commission(store, state, author_name, author_email):
     )
     result = {'complete': False, 'phases': {}}
     for name, role, command, seconds in phases:
+        cwd = INSTALL
+        if name == 'source-checks':
+            cwd = INSTALL / 'candidates' / ('commission-' + evidence.name)
+            result['source_tree'] = str(cwd)
         result['phases'][name] = 'running'
         atomic_json(evidence / 'result.json', result)
         print('Commissioning: ' + name, flush=True)
+        log = evidence / (name + '.log')
         try:
-            service(role, command, cwd=INSTALL, seconds=seconds, output_file=evidence / (name + '.log'))
+            if name == 'source-checks':
+                commissioning_source(cwd)
+            service(role, command, cwd=cwd, seconds=seconds, output_file=log)
         except (ValueError, OSError, subprocess.SubprocessError) as error:
+            if not log.exists():
+                atomic_json(log, {'error': str(error)})
             result['phases'][name] = 'failed'
             atomic_json(evidence / 'result.json', result)
-            raise ValueError(f'{name} failed; inspect private log {evidence / (name + ".log")}') from error
+            raise ValueError(f'{name} failed; inspect private log {log}') from error
         result['phases'][name] = 'passed'
         atomic_json(evidence / 'result.json', result)
     operator.update({'author_name': author_name, 'author_email': author_email, 'commissioned': True})

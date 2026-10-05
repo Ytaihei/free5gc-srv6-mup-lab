@@ -63,20 +63,50 @@ class IsolationProbeTests(unittest.TestCase):
                     errno.EACCES, errno.EPERM, errno.ENOENT, errno.ENOTDIR))
 
     def test_probe_keeps_network_gate_strict_and_names_failure(self):
-        for result in (errno.EACCES, errno.EPERM, errno.ECONNREFUSED, 0, errno.ETIMEDOUT):
+        for result in (errno.EACCES, errno.EPERM, errno.ECONNREFUSED, 0, errno.ETIMEDOUT,
+                       errno.EAGAIN, errno.EHOSTUNREACH, errno.ENETUNREACH, None):
             with self.subTest(result=result), patch.object(admin.os, 'getuid', return_value=1000), \
                     patch.object(admin.os, 'access', return_value=False), \
                     patch.object(admin, 'directory_denied', return_value=True), \
                     patch.object(admin, 'socket_denied', return_value=True), \
                     patch.object(admin.socket, 'socket') as mocked, \
                     contextlib.redirect_stdout(io.StringIO()) as output:
-                mocked.return_value.__enter__.return_value.connect_ex.return_value = result
+                connection = mocked.return_value.__enter__.return_value
+                if result is None:
+                    connection.sendto.side_effect = TimeoutError('timed out')
+                elif result:
+                    connection.sendto.side_effect = OSError(result, 'test failure')
                 if result in (errno.EACCES, errno.EPERM):
                     admin.isolation_probe()
                 else:
                     with self.assertRaisesRegex(ValueError, 'private_network_denied'):
                         admin.isolation_probe()
                 self.assertEqual(json.loads(output.getvalue())['network_errno'], result)
+                self.assertEqual(json.loads(output.getvalue())['network_probe'], 'udp-self-send')
+                mocked.assert_called_once_with(socket.AF_INET, socket.SOCK_DGRAM)
+                connection.connect_ex.assert_not_called()
+
+    def test_udp_probe_owns_its_loopback_destination_and_success_is_not_denial(self):
+        with patch.object(admin.socket, 'socket') as mocked:
+            connection = mocked.return_value.__enter__.return_value
+            connection.getsockname.return_value = ('127.0.0.2', 49152)
+            self.assertEqual(admin.private_network_errno(), 0)
+            connection.bind.assert_called_once_with(('127.0.0.2', 0))
+            connection.settimeout.assert_called_once_with(2)
+            connection.sendto.assert_called_once_with(b'srv6-mup-isolation-probe', ('127.0.0.2', 49152))
+            connection.recv.assert_not_called()
+            mocked.return_value.__exit__.assert_called_once()
+
+    def test_udp_socket_setup_failure_is_not_egress_denial(self):
+        with patch.object(admin.socket, 'socket', side_effect=PermissionError(errno.EPERM, 'test')):
+            with self.assertRaises(PermissionError):
+                admin.private_network_errno()
+        with patch.object(admin.socket, 'socket') as mocked:
+            connection = mocked.return_value.__enter__.return_value
+            connection.bind.side_effect = PermissionError(errno.EACCES, 'test')
+            with self.assertRaises(PermissionError):
+                admin.private_network_errno()
+            connection.sendto.assert_not_called()
 
 
 class CommissioningTests(unittest.TestCase):
@@ -92,6 +122,23 @@ class CommissioningTests(unittest.TestCase):
         self.state['paused'] = False
         bg.atomic_json(self.install / 'operator.json', {
             'commissioned': True, 'automatic_merge': True, 'model': 'retained-model'})
+        self.files = ['Makefile', 'scripts/example.py', 'docs/nested/guide.md', 'config/public-source.json']
+        for name in self.files:
+            target = self.install / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('public fixture\n')
+        (self.install / 'scripts/example.py').chmod(0o755)
+        (self.install / 'config/public-source.json').write_text(json.dumps({'files': self.files}))
+        (self.install / 'candidates').mkdir()
+        for name in ['bin/codex', 'venv/lib/tool.py', 'go/README.md']:
+            target = self.install / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('not public source\n')
+        bg.atomic_json(self.install / 'installation.json', {
+            'files': {name: bg.digest(self.install / name) for name in self.files + ['bin/codex']}})
+        mocked = patch.object(admin, 'protected')
+        mocked.start()
+        self.addCleanup(mocked.stop)
         for attribute, value in [('INSTALL', self.install), ('STATE', self.store.directory)]:
             mocked = patch.object(admin, attribute, value)
             mocked.start()
@@ -106,6 +153,12 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(service.call_count, 4)
         report = next((self.store.directory / 'commissioning').glob('*/result.json'))
         self.assertTrue(json.loads(report.read_text())['complete'])
+        source_tree = Path(json.loads(report.read_text())['source_tree'])
+        self.assertEqual(service.call_args.kwargs['cwd'], source_tree)
+        self.assertEqual(service.call_args.args[0], 'checks')
+        self.assertEqual(service.call_args.args[1], ['make', 'check'])
+        self.assertEqual(source_tree.parent, self.install / 'candidates')
+        self.assertFalse((source_tree / 'operator.json').exists())
         self.assertEqual(len(list(report.parent.glob('*.log'))), 4)
         self.assertTrue(self.store.read()['paused'])
         operator = json.loads((self.install / 'operator.json').read_text())
@@ -125,6 +178,52 @@ class CommissioningTests(unittest.TestCase):
         report = next((self.store.directory / 'commissioning').glob('*/result.json'))
         self.assertEqual(json.loads(report.read_text())['phases']['isolation-probe'], 'failed')
         self.assertTrue((report.parent / 'isolation-probe.log').exists())
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+        self.assertTrue(self.store.read()['paused'])
+        self.assertEqual(list((self.install / 'candidates').iterdir()), [])
+
+    def test_source_snapshot_is_public_only_and_readable_under_private_umask(self):
+        destination = self.install / 'candidates' / 'test-snapshot'
+        previous = os.umask(0o077)
+        try:
+            admin.commissioning_source(destination)
+        finally:
+            os.umask(previous)
+        actual = {str(path.relative_to(destination)) for path in destination.rglob('*') if path.is_file()}
+        self.assertEqual(actual, set(self.files))
+        for path in [destination, *destination.rglob('*')]:
+            if path.is_dir() or path.name == 'example.py':
+                self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+            else:
+                self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+            if path.is_file():
+                self.assertEqual(path.read_bytes(), (self.install / path.relative_to(destination)).read_bytes())
+
+    def test_source_snapshot_refuses_overwrite_or_modified_inventory(self):
+        destination = self.install / 'candidates' / 'retained'
+        destination.mkdir()
+        with self.assertRaises(FileExistsError):
+            admin.commissioning_source(destination)
+        (self.install / 'config/public-source.json').write_text(json.dumps({'files': ['operator.json']}))
+        destination = self.install / 'candidates' / 'new'
+        with self.assertRaisesRegex(ValueError, 'publication inventory changed'):
+            admin.commissioning_source(destination)
+        self.assertFalse(destination.exists())
+
+    def test_failed_source_preparation_retains_evidence_without_executing_checks(self):
+        (self.install / 'Makefile').write_text('modified installed source\n')
+        with patch.object(admin, 'service', side_effect=self.service) as service:
+            with self.assertRaisesRegex(ValueError, 'source-checks failed; inspect private log'):
+                admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
+        self.assertEqual(service.call_count, 3)
+        report = next((self.store.directory / 'commissioning').glob('*/result.json'))
+        result = json.loads(report.read_text())
+        self.assertEqual(result['phases']['source-checks'], 'failed')
+        self.assertFalse(result['complete'])
+        self.assertTrue(Path(result['source_tree']).exists())
+        log = report.parent / 'source-checks.log'
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertIn('differs from installed manifest', log.read_text())
         self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
         self.assertTrue(self.store.read()['paused'])
 
