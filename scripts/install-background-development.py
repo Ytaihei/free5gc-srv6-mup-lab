@@ -14,12 +14,51 @@ import sys
 from background_development import ROOT, atomic_json, load_policy
 from background_executor import ACCOUNTS, HOMES, INSTALL, REVIEW_SCHEMA, STATE
 
+UNITS = ('srv6-mup-background.service', 'srv6-mup-background.timer',
+         'srv6-mup-background-watchdog.service', 'srv6-mup-background-watchdog.timer')
+UNIT_DIRECTORY = Path('/etc/systemd/system')
+
+
+def check_units(adopt=False):
+    """Check conflicts before creating packages, accounts or installation state."""
+    existing = []
+    for name in UNITS:
+        target = UNIT_DIRECTORY / name
+        if not target.exists() and not target.is_symlink():
+            continue
+        if not adopt:
+            raise ValueError('existing systemd unit is preserved; review --adopt-existing-units')
+        info = target.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                or info.st_mode & 0o022 or info.st_nlink != 1
+                or target.read_bytes() != (ROOT / 'configs/systemd' / name).read_bytes()):
+            raise ValueError('existing systemd unit is not an exact protected template')
+        existing.append(name)
+    # An override can change the behavior of an otherwise matching template.
+    for name in UNITS:
+        fragment = subprocess.check_output(
+            ['systemctl', 'show', name, '--property=FragmentPath', '--value'], text=True).strip()
+        if fragment and fragment != str(UNIT_DIRECTORY / name):
+            raise ValueError('a systemd unit outside the installation directory already exists')
+        overrides = subprocess.check_output(
+            ['systemctl', 'show', name, '--property=DropInPaths', '--value'], text=True)
+        if overrides.strip():
+            raise ValueError('systemd drop-ins require separate operator review')
+        if name.endswith('.service'):
+            active = subprocess.check_output(
+                ['systemctl', 'show', name, '--property=ActiveState', '--value'], text=True).strip()
+            if active not in ('inactive', 'failed'):
+                raise ValueError('background service must be inactive before installation')
+    return existing
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--codex', type=Path, help='existing, trusted standalone Codex executable')
     parser.add_argument('--go-root', type=Path, help='existing pinned Go installation directory')
+    parser.add_argument('--adopt-existing-units', action='store_true',
+                        help='reuse exact protected templates after disabling their timers; never overwrite custom units')
     args = parser.parse_args()
     load_policy()
     print('Install fixed coordinator under /opt/srv6-mup-background; private state under /var/lib.')
@@ -33,6 +72,7 @@ def main():
         raise ValueError('--apply requires sudo; no password is read by this script')
     if INSTALL.exists() or INSTALL.is_symlink() or STATE.exists() or STATE.is_symlink():
         raise ValueError('existing installation/state is preserved; upgrades need separate review')
+    existing_units = check_units(args.adopt_existing_units)
     if not args.codex or not args.go_root:
         raise ValueError('--codex and --go-root must name already trusted tool installations')
     codex = args.codex.resolve(strict=True)
@@ -59,6 +99,13 @@ def main():
             pass
         else:
             raise ValueError('reserved account already exists; do not adopt unrelated accounts')
+    # All conflicts, tools, source files and account names were checked first.
+    for name in existing_units:
+        if name.endswith('.timer'):
+            subprocess.run(['systemctl', 'disable', '--now', name], check=True)
+    # Shared source/tools are public, while account homes and state explicitly
+    # retain 0700/0600. Do not inherit a caller's restrictive umask for the venv.
+    os.umask(0o022)
     subprocess.run(['apt-get', 'update'], check=True)
     subprocess.run(['apt-get', 'install', '-y', 'git', 'curl', 'make', 'jq', 'gh',
                     'python3-venv', 'python3-yaml', 'ca-certificates'], check=True)
@@ -93,9 +140,13 @@ def main():
     for name in ('bin/codex', 'review-schema.json'):
         files[name] = hashlib.sha256((INSTALL / name).read_bytes()).hexdigest()
     atomic_json(INSTALL / 'installation.json', {'version': 1, 'files': files})
-    for name in ('srv6-mup-background.service', 'srv6-mup-background.timer',
-                 'srv6-mup-background-watchdog.service', 'srv6-mup-background-watchdog.timer'):
-        target = Path('/etc/systemd/system') / name
+    for name in UNITS:
+        target = UNIT_DIRECTORY / name
+        if name in existing_units:
+            # Preserve matching units; do not overwrite concurrent changes.
+            if target.is_symlink() or target.read_bytes() != (INSTALL / 'configs/systemd' / name).read_bytes():
+                raise ValueError('existing systemd unit changed during installation')
+            continue
         if target.exists() or target.is_symlink():
             raise ValueError('existing systemd unit is preserved')
         shutil.copyfile(INSTALL / 'configs/systemd' / name, target)

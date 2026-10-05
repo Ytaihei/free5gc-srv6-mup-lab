@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,102 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import background_development as bg
 import background_executor as executor
+
+INSTALLER_SPEC = importlib.util.spec_from_file_location('background_installer', ROOT / 'scripts/install-background-development.py')
+installer = importlib.util.module_from_spec(INSTALLER_SPEC)
+INSTALLER_SPEC.loader.exec_module(installer)
+
+
+class InstallationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
+        self.unit_directory = self.directory / 'units'
+        self.unit_directory.mkdir()
+        unit_patch = patch.object(installer, 'UNIT_DIRECTORY', self.unit_directory)
+        unit_patch.start()
+        self.addCleanup(unit_patch.stop)
+        systemctl_patch = patch.object(installer.subprocess, 'check_output', side_effect=self.show)
+        self.systemctl = systemctl_patch.start()
+        self.addCleanup(systemctl_patch.stop)
+
+    def show(self, argv, **kwargs):
+        if '--property=ActiveState' in argv:
+            return 'inactive\n'
+        if '--property=FragmentPath' in argv:
+            path = self.unit_directory / argv[2]
+            return str(path) + '\n' if path.exists() else ''
+        return ''
+
+    def copy_unit(self):
+        path = self.unit_directory / installer.UNITS[0]
+        path.write_bytes((ROOT / 'configs/systemd' / path.name).read_bytes())
+        path.chmod(0o644)
+        return path
+
+    @staticmethod
+    def protected_stat(path, *args, **kwargs):
+        info = os.lstat(path)
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_nlink=info.st_nlink)
+
+    def test_fresh_install_has_no_units_to_adopt(self):
+        self.assertEqual(installer.check_units(), [])
+
+    def test_existing_unit_refuses_before_any_install_mutation(self):
+        self.copy_unit()
+        with patch.object(installer, 'INSTALL', self.directory / 'install'), \
+                patch.object(installer, 'STATE', self.directory / 'state'), \
+                patch.object(installer.os, 'geteuid', return_value=0), \
+                patch.object(sys, 'argv', ['installer', '--apply']), \
+                patch.object(installer.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'existing systemd unit'):
+                installer.main()
+            run.assert_not_called()
+            self.assertFalse((self.directory / 'install').exists())
+            self.assertFalse((self.directory / 'state').exists())
+
+    def test_exact_protected_template_can_be_adopted(self):
+        path = self.copy_unit()
+        with patch.object(Path, 'lstat', self.protected_stat):
+            self.assertEqual(installer.check_units(adopt=True), [path.name])
+
+    def test_custom_unit_is_preserved(self):
+        path = self.copy_unit()
+        path.write_text('[Service]\nExecStart=/custom/program\n')
+        with patch.object(Path, 'lstat', self.protected_stat):
+            with self.assertRaisesRegex(ValueError, 'exact protected template'):
+                installer.check_units(adopt=True)
+        self.assertIn('/custom/program', path.read_text())
+
+    def test_symlink_unit_refused(self):
+        path = self.unit_directory / installer.UNITS[0]
+        path.symlink_to(ROOT / 'configs/systemd' / path.name)
+        with patch.object(Path, 'lstat', self.protected_stat):
+            with self.assertRaisesRegex(ValueError, 'exact protected template'):
+                installer.check_units(adopt=True)
+
+    def test_unprotected_template_refused(self):
+        path = self.copy_unit()
+        path.chmod(0o666)
+        with patch.object(Path, 'lstat', self.protected_stat):
+            with self.assertRaisesRegex(ValueError, 'exact protected template'):
+                installer.check_units(adopt=True)
+
+    def test_drop_in_refused(self):
+        self.systemctl.side_effect = lambda argv, **kwargs: '/override.conf\n' if '--property=DropInPaths' in argv else self.show(argv)
+        with self.assertRaisesRegex(ValueError, 'drop-ins'):
+            installer.check_units(adopt=True)
+
+    def test_vendor_unit_refused(self):
+        self.systemctl.side_effect = lambda argv, **kwargs: '/usr/lib/systemd/system/custom.service\n'
+        with self.assertRaisesRegex(ValueError, 'outside the installation'):
+            installer.check_units(adopt=True)
+
+    def test_running_service_refused(self):
+        self.systemctl.side_effect = lambda argv, **kwargs: 'active\n' if '--property=ActiveState' in argv else self.show(argv)
+        with self.assertRaisesRegex(ValueError, 'must be inactive'):
+            installer.check_units(adopt=True)
 
 
 class BackgroundPolicyTests(unittest.TestCase):
@@ -249,6 +346,26 @@ class SnapshotTests(unittest.TestCase):
         executor.snapshot(self.source, self.target)
         self.assertFalse((self.target / '.git').exists())
         self.assertEqual((self.target / 'example.py').read_text(), 'print(1)')
+
+    def test_snapshot_and_git_readable_under_private_service_umask(self):
+        (self.source / 'nested').mkdir()
+        (self.source / 'nested/example.py').write_text('print(1)')
+        previous = os.umask(0o077)
+        try:
+            executor.snapshot(self.source, self.target)
+            executor.command(['git', 'init', '-q', self.target])
+            executor.command(['git', '-C', self.target, 'add', '--all'])
+            executor.command(['git', '-C', self.target, '-c', 'user.name=Test',
+                              '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'candidate'])
+        finally:
+            os.umask(previous)
+        # Roles with different UIDs must traverse/read but never modify it.
+        for path in [self.target, *self.target.rglob('*')]:
+            mode = path.stat().st_mode
+            self.assertEqual(mode & 0o022, 0, str(path))
+            self.assertEqual(mode & 0o044, 0o044, str(path))
+            if path.is_dir():
+                self.assertEqual(mode & 0o011, 0o011, str(path))
 
     def test_symlink_file_rejected(self):
         (self.source / 'link').symlink_to('/etc/passwd')

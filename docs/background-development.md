@@ -53,6 +53,17 @@ under `/var/lib/srv6-mup-background`. Existing accounts, units, installation or
 state cause refusal, not replacement. A partial installation is retained; do not
 delete it blindly and rerun. Neither timer is enabled.
 
+If unit files were copied and a timer enabled **before installation**, a timer
+listing does not demonstrate a working developer. Its executable under `/opt`
+may not exist. The installer now checks unit conflicts before installing packages
+or creating accounts/state. For this specific recovery, add
+`--adopt-existing-units` to the installation command above. This accepts only
+byte-identical, root-owned templates with no group/other write access, symlinks,
+hardlinks or systemd overrides. Active services and units from other directories
+are refused. Matching timers are disabled before installation and remain disabled
+until authentication, commissioning and resume have succeeded. Custom units and
+partial installations require separate review; do not delete them to force a retry.
+
 Authenticate locally under the new accounts; never copy an existing auth file or
 paste tokens into a command line, chat, issue or public workflow:
 
@@ -96,6 +107,24 @@ sudo /opt/srv6-mup-background/venv/bin/python3 \
 sudo systemctl enable --now srv6-mup-background.timer srv6-mup-background-watchdog.timer
 sudo systemctl list-timers srv6-mup-background.timer
 ```
+
+Verify the actual installation as well as both timers:
+
+```bash
+test -x /opt/srv6-mup-background/venv/bin/python3
+getent passwd mup-bg-worker mup-bg-checks mup-bg-publisher
+sudo /opt/srv6-mup-background/venv/bin/python3 \
+  /opt/srv6-mup-background/scripts/background-development.py \
+  --state /var/lib/srv6-mup-background status
+systemctl is-active srv6-mup-background.timer srv6-mup-background-watchdog.timer
+sudo journalctl -u srv6-mup-background.service -u srv6-mup-background-watchdog.service
+```
+
+The status command in an ordinary checkout uses a different, initially paused
+state; it cannot prove commissioning. A timer waiting for its first run, a
+service with no execution history, and passing offline tests are not evidence of
+an unattended development cycle. Keep automatic merging off until an actual
+isolated candidate, checks, review, PR and notification have been inspected.
 
 Starting the service manually still enforces the approved time window. There is
 no daytime deployment bypass. The worker receives one task; tests and an

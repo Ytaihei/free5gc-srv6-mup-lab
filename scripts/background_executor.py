@@ -183,6 +183,9 @@ def snapshot(source, destination):
     files = 0
     for current, directories, names in os.walk(source, followlinks=False):
         relative = Path(current).relative_to(source)
+        target_directory = destination / relative
+        target_directory.mkdir(parents=True, exist_ok=True, mode=0o755)
+        target_directory.chmod(0o755)
         directories[:] = [name for name in directories if name != '.git']
         for name in directories:
             entry = Path(current) / name
@@ -200,7 +203,6 @@ def snapshot(source, destination):
             if files > 5000 or total > 64 * 1024 * 1024:
                 raise ValueError('snapshot exceeds its file or byte limit')
             target = destination / relative / name
-            target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
             shutil.copyfile(entry, target, follow_symlinks=False)
             target.chmod(0o755 if info.st_mode & 0o111 else 0o644)
 
@@ -211,7 +213,10 @@ def command(argv, cwd=None, seconds=120):
     result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
                             env={'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C.UTF-8',
                                  'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null'},
-                            timeout=seconds, check=False)
+                            # Public candidate Git metadata must be readable by
+                            # the isolated checker/reviewer/publisher, even when
+                            # the parent uses 0077 for its private state.
+                            umask=0o022, timeout=seconds, check=False)
     if result.returncode:
         raise ValueError('coordinator Git operation failed; no candidate was published')
     return result.stdout
@@ -250,7 +255,8 @@ def publish(store, state, policy, task_id, entry):
         raise ValueError('invalid retained branch')
     service('publisher', ['git', '-c', 'credential.helper=!gh auth git-credential',
                           '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
-                          'push', 'origin', entry['head'] + ':refs/heads/' + branch],
+                          'push', 'https://github.com/' + policy['repository'] + '.git',
+                          entry['head'] + ':refs/heads/' + branch],
             cwd=candidate, seconds=90)
     existing = github(policy, f"repos/{policy['repository']}/pulls?state=all&head=Ytaihei:{branch}")
     pr = existing[0] if existing else github(policy, f"repos/{policy['repository']}/pulls", 'POST', {

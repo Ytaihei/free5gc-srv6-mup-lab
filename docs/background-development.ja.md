@@ -50,6 +50,17 @@ sudo python3 scripts/install-background-development.py --apply \
 unit・導入先・状態があれば上書きせず拒否します。部分的な導入も保持するため、
 無確認で削除して再実行しないでください。両timerは有効化しません。
 
+**導入前に**unitファイルだけをコピーしてtimerを有効化した場合、timer一覧に
+表示されても開発処理が動く証拠にはなりません。`/opt`の実行ファイルが存在しない
+可能性があります。インストーラーはパッケージ導入・アカウント・状態作成より前に
+unit競合を確認します。この状態からの復旧に限り、上記の導入コマンドへ
+`--adopt-existing-units`を追加できます。内容が完全一致し、root所有で、グループ・
+他ユーザーの書込み権限、シンボリックリンク、ハードリンク、systemdの上書き設定が
+ないテンプレートだけを受け入れます。稼働中のサービスと別ディレクトリのunitは
+拒否します。一致するtimerは導入前に無効化し、認証・導入確認・再開が成功するまで
+無効のままにします。独自unitや部分導入は別途確認が必要です。再試行のために
+無確認で削除しないでください。
+
 新しいアカウントでローカルに認証します。既存の認証ファイルをコピーせず、
 トークンをコマンド引数・チャット・Issue・公開ワークフローへ貼らないでください。
 
@@ -91,6 +102,23 @@ sudo /opt/srv6-mup-background/venv/bin/python3 \
 sudo systemctl enable --now srv6-mup-background.timer srv6-mup-background-watchdog.timer
 sudo systemctl list-timers srv6-mup-background.timer
 ```
+
+両timerに加え、実際の導入状態も確認します。
+
+```bash
+test -x /opt/srv6-mup-background/venv/bin/python3
+getent passwd mup-bg-worker mup-bg-checks mup-bg-publisher
+sudo /opt/srv6-mup-background/venv/bin/python3 \
+  /opt/srv6-mup-background/scripts/background-development.py \
+  --state /var/lib/srv6-mup-background status
+systemctl is-active srv6-mup-background.timer srv6-mup-background-watchdog.timer
+sudo journalctl -u srv6-mup-background.service -u srv6-mup-background-watchdog.service
+```
+
+通常のチェックアウトのstatusは、別の初期停止状態を参照するため、導入確認の証拠
+にはなりません。初回待ちのtimer、実行履歴のないサービス、オフライン試験の成功は
+無人開発の一巡を実証しません。実際の分離候補・検査・レビュー・PR・通知を確認する
+まで、自動マージは無効に保ってください。
 
 サービスを手動起動しても合意した時間帯を検査します。昼間の配備を許可する
 迂回機能はありません。開発担当は1タスクを受け、固定候補を別の検査・読取り専用
