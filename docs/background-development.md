@@ -95,6 +95,39 @@ automatic merging until a real isolated PR/check/review cycle has been inspected
 The operator must explicitly set the private `automatic_merge` field after that
 acceptance; a model cannot write this file.
 
+### Commissioning failures and coordinator repair
+
+Commissioning records separate `worker-auth`, `publisher-auth`, `isolation-probe`
+and `source-checks` phases. Each attempt retains a private directory under
+`/var/lib/srv6-mup-background/commissioning/`, with a `result.json` and 0600 logs.
+An error names the failed phase and exact log path. Inspect logs locally; do not
+publish authentication output. Recommissioning pauses the queue and invalidates
+earlier acceptance before testing, so failure cannot leave it commissioned.
+
+`InaccessiblePaths` denies access but need not hide the path's existence. The
+probe tests directory access and Unix socket connections, not `Path.exists()`.
+Missing/masked endpoints are accepted; a successful connection or merely a
+stopped daemon is not. The private-network probe still requires a permission
+denial, never connection refusal or a timeout. Run this probe only in the
+isolated checks service; ordinary host execution does not validate that service.
+
+To apply a reviewed coordinator repair to an existing installation, first stop
+and disable both timers and stop the background service. From the reviewed
+checkout run:
+
+```bash
+sudo python3 scripts/install-background-development.py --apply --update-coordinator
+```
+
+This narrow updater verifies all installed manifest hashes, accepts only the
+coordinator administrator/executor/installer, their tests, paired guide and
+translation hashes, and refuses source inventory changes. It cannot update the
+policy, units, dependencies, tools or lab code. It retains old files and manifests
+under the private `updates/` directory, preserves accounts, credentials and task
+evidence, then leaves the queue paused and commissioning/automatic merging off.
+Run `commission` again before resuming. A partial update retains its backup and
+fails closed; do not delete installation/state or edit the manifest to bypass it.
+
 ## Run, pause and observe
 
 After commissioning, an operator may resume **code-only** development and enable
