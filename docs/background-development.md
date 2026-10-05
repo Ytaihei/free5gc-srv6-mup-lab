@@ -104,12 +104,33 @@ An error names the failed phase and exact log path. Inspect logs locally; do not
 publish authentication output. Recommissioning pauses the queue and invalidates
 earlier acceptance before testing, so failure cannot leave it commissioned.
 
+The `source-checks` phase runs as the checks account against a retained,
+root-owned snapshot under `/opt/srv6-mup-background/candidates/`. Only files in
+the verified public-source inventory are copied and checked against the installed
+manifest. Installed tools, private settings and evidence are excluded: running
+the archive checks directly in the installation directory would incorrectly
+include those extra files. The snapshot path is recorded in `result.json`;
+neither success nor failure deletes it. Snapshot preparation failures also retain
+a private phase log and cannot commission the installation.
+
 `InaccessiblePaths` denies access but need not hide the path's existence. The
 probe tests directory access and Unix socket connections, not `Path.exists()`.
 Missing/masked endpoints are accepted; a successful connection or merely a
-stopped daemon is not. The private-network probe still requires a permission
-denial, never connection refusal or a timeout. Run this probe only in the
-isolated checks service; ordinary host execution does not validate that service.
+stopped daemon is not.
+
+`IPAddressDeny` filters packets. A blocked TCP connection can retry until Python
+reports `EAGAIN` (`network_errno: 11`), which does not prove isolation. The
+private-network probe instead sends one UDP datagram to its own ephemeral port
+bound on `127.0.0.2`, without contacting an existing host daemon or a live lab.
+Only `EPERM` or `EACCES` from `sendto` counts as denial. Successful sending,
+connection refusal, unreachable routes, timeouts and socket setup failures do
+not pass. The log identifies this method as `udp-self-send`. No network allowlist
+or sandbox restriction is relaxed. See the upstream
+[packet-filter documentation](https://github.com/systemd/systemd/blob/v255/man/systemd.resource-control.xml)
+and [Python timeout handling](https://github.com/python/cpython/blob/v3.12.3/Modules/socketmodule.c).
+Run this probe only in the isolated checks service; ordinary host execution does
+not validate that service. This loopback probe does not attest every address
+range, IPv6 path or live-lab operation.
 
 To apply a reviewed coordinator repair to an existing installation, first stop
 and disable both timers and stop the background service. From the reviewed
