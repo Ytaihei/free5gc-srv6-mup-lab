@@ -362,16 +362,45 @@ def work_budget(deadline, reserve=0):
     return int(seconds)
 
 
+def worker_work_parent():
+    """Repair only the coordinator-owned work parent, including legacy 0700.
+
+    mkdir's mode is filtered by the coordinator's 0077 umask. Use a pinned
+    directory descriptor to set the intended mode without following links or
+    changing the private account home, repositories or credentials.
+    """
+    home = HOMES['worker']
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    home_fd = os.open(home, flags)
+    try:
+        try:
+            os.mkdir('work', mode=0o755, dir_fd=home_fd)
+        except FileExistsError:
+            pass
+        descriptor = os.open('work', flags, dir_fd=home_fd)
+        try:
+            info = os.fstat(descriptor)
+            # Production callers are root-gated; do not adopt worker-owned or
+            # writable-by-others directories. Tests use their coordinator UID.
+            if info.st_uid != os.geteuid() or info.st_mode & 0o7022:
+                raise ValueError('unexpected worker work-parent ownership or permissions; preserved')
+            os.fchmod(descriptor, 0o755)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(home_fd)
+    return home / 'work'
+
+
 def develop(store, state, policy, operator, task, run_id, deadline):
     entry = state['tasks'].setdefault(task['id'], {'status': 'working'})
     if entry.get('receipt') and entry.get('candidate_id') and not entry.get('pr'):
         publish(store, state, policy, task['id'], entry)
         return
     worker_home = HOMES['worker']
-    work = worker_home / 'work' / task['id']
+    work = worker_work_parent() / task['id']
     worker = pwd.getpwnam(ACCOUNTS['worker'])
     # root-owned parent; the worker may modify only its dedicated repository.
-    work.parent.mkdir(exist_ok=True, mode=0o755)
     if not work.exists():
         command(['git', '-c', 'core.hooksPath=/dev/null', 'clone', '--no-hardlinks',
                  'https://github.com/' + policy['repository'] + '.git', str(work)], seconds=120)

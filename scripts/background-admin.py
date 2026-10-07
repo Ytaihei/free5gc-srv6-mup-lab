@@ -5,14 +5,17 @@ import errno
 import json
 import os
 from pathlib import Path
+import pwd
 import shutil
 import subprocess
 import socket
 import sys
+import tempfile
 import uuid
 
 from background_development import Store, atomic_json, digest, safe_relative
-from background_executor import INSTALL, ROOT, STATE, protected, service, watchdog
+from background_executor import (ACCOUNTS, INSTALL, ROOT, STATE, protected, service,
+                                 watchdog, worker_work_parent)
 
 
 def directory_denied(path):
@@ -97,6 +100,43 @@ def commissioning_source(destination):
             raise ValueError('commissioning source differs from installed manifest')
 
 
+def commissioning_workspace(run_id):
+    parent = worker_work_parent()
+    name = 'commission-' + uuid.UUID(hex=run_id).hex
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    parent_fd = os.open(parent, flags)
+    try:
+        info = os.fstat(parent_fd)
+        if info.st_uid != os.geteuid() or info.st_mode & 0o7022:
+            raise ValueError('unexpected worker work parent; preserved')
+        os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+        try:
+            worker = pwd.getpwnam(ACCOUNTS['worker'])
+            os.fchown(descriptor, worker.pw_uid, worker.pw_gid)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent_fd)
+    return parent / name
+
+
+def workspace_probe():
+    checks = {'unprivileged': os.geteuid() != 0,
+              'parent_searchable': os.access('..', os.X_OK),
+              'parent_not_writable': not os.access('..', os.W_OK),
+              'workspace_writable': os.access('.', os.W_OK | os.X_OK)}
+    with tempfile.TemporaryFile(dir='.') as probe:
+        probe.write(b'workspace-probe')
+        probe.flush()
+        probe.seek(0)
+        checks['workspace_io'] = probe.read() == b'workspace-probe'
+    print(json.dumps({'checks': checks}), flush=True)
+    if not all(checks.values()):
+        raise ValueError('worker workspace probe failed: ' + ', '.join(
+            key for key, passed in checks.items() if not passed))
+
+
 def commission(store, state, author_name, author_email):
     for value in (author_name, author_email):
         if not value.strip() or '\n' in value:
@@ -115,6 +155,7 @@ def commission(store, state, author_name, author_email):
         ('worker-auth', 'worker', [INSTALL / 'bin/codex', 'login', 'status'], 30),
         ('publisher-auth', 'publisher', ['gh', 'auth', 'status'], 30),
         ('isolation-probe', 'checks', ['python3', INSTALL / 'scripts/background-admin.py', 'probe-isolation'], 30),
+        ('worker-workspace', 'worker', ['python3', INSTALL / 'scripts/background-admin.py', 'probe-workspace'], 30),
         ('source-checks', 'checks', ['make', 'check'], 900),
     )
     result = {'complete': False, 'phases': {}}
@@ -128,6 +169,10 @@ def commission(store, state, author_name, author_email):
         print('Commissioning: ' + name, flush=True)
         log = evidence / (name + '.log')
         try:
+            if name == 'worker-workspace':
+                cwd = commissioning_workspace(evidence.name)
+                result['worker_workspace'] = str(cwd)
+                atomic_json(evidence / 'result.json', result)
             if name == 'source-checks':
                 commissioning_source(cwd)
             service(role, command, cwd=cwd, seconds=seconds, output_file=log)
@@ -152,6 +197,7 @@ def main():
     sub = parser.add_subparsers(dest='action', required=True)
     sub.add_parser('watchdog')
     sub.add_parser('probe-isolation', help='read-only probe for the isolated checks account')
+    sub.add_parser('probe-workspace', help='scratch I/O probe for the isolated worker account')
     commission_parser = sub.add_parser('commission')
     commission_parser.add_argument('--author-name', required=True)
     commission_parser.add_argument('--author-email', required=True)
@@ -160,6 +206,9 @@ def main():
     args = parser.parse_args()
     if args.action == 'probe-isolation':
         isolation_probe()
+        return
+    if args.action == 'probe-workspace':
+        workspace_probe()
         return
     if ROOT != INSTALL or os.geteuid() != 0:
         raise ValueError('only the root-owned installed administration tool can perform this operation')
