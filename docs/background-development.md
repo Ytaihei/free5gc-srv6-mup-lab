@@ -97,12 +97,28 @@ acceptance; a model cannot write this file.
 
 ### Commissioning failures and coordinator repair
 
-Commissioning records separate `worker-auth`, `publisher-auth`, `isolation-probe`
-and `source-checks` phases. Each attempt retains a private directory under
+Commissioning records separate `worker-auth`, `publisher-auth`, `isolation-probe`,
+`worker-workspace` and `source-checks` phases. Each attempt retains a private directory under
 `/var/lib/srv6-mup-background/commissioning/`, with a `result.json` and 0600 logs.
 An error names the failed phase and exact log path. Inspect logs locally; do not
 publish authentication output. Recommissioning pauses the queue and invalidates
 earlier acceptance before testing, so failure cannot leave it commissioned.
+
+The `worker-workspace` phase checks directory traversal and scratch-file I/O as
+the actual isolated worker, without invoking a model, deploying or publishing.
+It uses a new retained worker-owned directory under the same work parent as
+development checkouts; its path is recorded in `result.json`.
+
+A worker failure with `200/CHDIR` can occur if that root-owned work parent was
+created as `0700` by the coordinator's `UMask=0077`, despite requesting `0755`
+when creating it. Commissioning and development now explicitly set this one
+directory to `0755` using a non-symlink directory descriptor. Existing checkouts
+and unfinished edits are preserved. Unexpected ownership, links or permissions
+that allow other users to write are refused, not adopted. The private worker
+home stays `0700`; credentials and evidence permissions are unchanged. Reapply
+the reviewed coordinator repair below and recommission to repair an existing
+parent and test access before resuming the timers. Do not use recursive chmod
+or delete the checkout to work around this failure.
 
 The `source-checks` phase runs as the checks account against a retained,
 root-owned snapshot under `/opt/srv6-mup-background/candidates/`. Only files in

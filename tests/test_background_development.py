@@ -114,6 +114,14 @@ class CommissioningTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.worker = self.root / 'worker'
+        self.worker.mkdir(mode=0o700)
+        mocked = patch.object(executor, 'HOMES', {'worker': self.worker})
+        mocked.start()
+        self.addCleanup(mocked.stop)
+        mocked = patch.object(admin.pwd, 'getpwnam', return_value=admin.pwd.getpwuid(os.getuid()))
+        mocked.start()
+        self.addCleanup(mocked.stop)
         self.install = self.root / 'install'
         self.install.mkdir()
         self.store = bg.Store(self.root / 'state')
@@ -150,7 +158,7 @@ class CommissioningTests(unittest.TestCase):
     def test_every_phase_has_retained_evidence_and_success_remains_paused(self):
         with patch.object(admin, 'service', side_effect=self.service) as service:
             admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
-        self.assertEqual(service.call_count, 4)
+        self.assertEqual(service.call_count, 5)
         report = next((self.store.directory / 'commissioning').glob('*/result.json'))
         self.assertTrue(json.loads(report.read_text())['complete'])
         source_tree = Path(json.loads(report.read_text())['source_tree'])
@@ -159,7 +167,14 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(service.call_args.args[1], ['make', 'check'])
         self.assertEqual(source_tree.parent, self.install / 'candidates')
         self.assertFalse((source_tree / 'operator.json').exists())
-        self.assertEqual(len(list(report.parent.glob('*.log'))), 4)
+        self.assertEqual(len(list(report.parent.glob('*.log'))), 5)
+        workspace = Path(json.loads(report.read_text())['worker_workspace'])
+        self.assertEqual(workspace.parent, self.worker / 'work')
+        self.assertEqual(workspace.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(workspace.stat().st_uid, os.getuid())
+        self.assertEqual(service.call_args_list[3].kwargs['cwd'], workspace)
+        self.assertEqual(service.call_args_list[3].args[0], 'worker')
+        self.assertIn('probe-workspace', service.call_args_list[3].args[1])
         self.assertTrue(self.store.read()['paused'])
         operator = json.loads((self.install / 'operator.json').read_text())
         self.assertTrue(operator['commissioned'])
@@ -215,7 +230,7 @@ class CommissioningTests(unittest.TestCase):
         with patch.object(admin, 'service', side_effect=self.service) as service:
             with self.assertRaisesRegex(ValueError, 'source-checks failed; inspect private log'):
                 admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
-        self.assertEqual(service.call_count, 3)
+        self.assertEqual(service.call_count, 4)
         report = next((self.store.directory / 'commissioning').glob('*/result.json'))
         result = json.loads(report.read_text())
         self.assertEqual(result['phases']['source-checks'], 'failed')
@@ -226,6 +241,102 @@ class CommissioningTests(unittest.TestCase):
         self.assertIn('differs from installed manifest', log.read_text())
         self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
         self.assertTrue(self.store.read()['paused'])
+
+
+    def test_workspace_failure_blocks_commissioning_and_retains_evidence(self):
+        def fail(role, command, **kwargs):
+            self.service(role, command, **kwargs)
+            if 'probe-workspace' in command:
+                raise ValueError('workspace failed')
+        with patch.object(admin, 'service', side_effect=fail) as service:
+            with self.assertRaisesRegex(ValueError, 'worker-workspace failed; inspect private log'):
+                admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
+        self.assertEqual(service.call_count, 4)
+        report = next((self.store.directory / 'commissioning').glob('*/result.json'))
+        result = json.loads(report.read_text())
+        self.assertEqual(result['phases']['worker-workspace'], 'failed')
+        self.assertNotIn('source-checks', result['phases'])
+        self.assertTrue(Path(result['worker_workspace']).is_dir())
+        self.assertTrue((report.parent / 'worker-workspace.log').is_file())
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+        self.assertTrue(self.store.read()['paused'])
+
+
+class WorkerDirectoryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name) / 'worker'
+        self.home.mkdir(mode=0o700)
+        mocked = patch.object(executor, 'HOMES', {'worker': self.home})
+        mocked.start()
+        self.addCleanup(mocked.stop)
+
+    def test_new_parent_is_searchable_even_under_private_umask(self):
+        previous = os.umask(0o077)
+        try:
+            parent = executor.worker_work_parent()
+        finally:
+            os.umask(previous)
+        self.assertEqual(parent, self.home / 'work')
+        self.assertEqual(parent.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(self.home.stat().st_mode & 0o777, 0o700)
+
+    def test_legacy_parent_repaired_without_changing_checkout_or_credentials(self):
+        parent = self.home / 'work'
+        parent.mkdir(mode=0o700)
+        checkout = parent / 'existing'
+        checkout.mkdir(mode=0o700)
+        edited = checkout / 'unfinished.txt'
+        edited.write_text('preserve edits')
+        edited.chmod(0o600)
+        credentials = self.home / '.codex'
+        credentials.mkdir(mode=0o700)
+        executor.worker_work_parent()
+        self.assertEqual(parent.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(checkout.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(edited.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(edited.read_text(), 'preserve edits')
+        self.assertEqual(credentials.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.home.stat().st_mode & 0o777, 0o700)
+
+    def test_symlink_parent_is_refused_without_changing_target(self):
+        target = Path(self.temp.name) / 'unrelated'
+        target.mkdir(mode=0o700)
+        (self.home / 'work').symlink_to(target)
+        with self.assertRaises(OSError):
+            executor.worker_work_parent()
+        self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+
+    def test_unexpected_owner_or_writable_parent_is_refused(self):
+        parent = self.home / 'work'
+        parent.mkdir(mode=0o700)
+        with patch.object(executor.os, 'fstat', return_value=SimpleNamespace(
+                st_uid=os.geteuid() + 1, st_mode=parent.stat().st_mode)):
+            with self.assertRaisesRegex(ValueError, 'ownership or permissions'):
+                executor.worker_work_parent()
+        self.assertEqual(parent.stat().st_mode & 0o777, 0o700)
+        for mode in (0o777, 0o775, 0o2755):
+            parent.chmod(mode)
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, 'ownership or permissions'):
+                executor.worker_work_parent()
+            self.assertEqual(parent.stat().st_mode & 0o7777, mode)
+
+    def test_workspace_probe_checks_parent_protection_and_scratch_io(self):
+        for writable_parent in (False, True):
+            with self.subTest(writable_parent=writable_parent), \
+                    patch.object(admin.os, 'geteuid', return_value=1000), \
+                    patch.object(admin.os, 'access', side_effect=lambda path, mode:
+                                 writable_parent if path == '..' and mode == os.W_OK else True), \
+                    patch.object(admin.tempfile, 'TemporaryFile', return_value=io.BytesIO()) as temporary, \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                if writable_parent:
+                    with self.assertRaisesRegex(ValueError, 'parent_not_writable'):
+                        admin.workspace_probe()
+                else:
+                    admin.workspace_probe()
+                temporary.assert_called_once_with(dir='.')
+                self.assertTrue(json.loads(output.getvalue())['checks']['workspace_io'])
 
 
 class CoordinatorUpdateTests(unittest.TestCase):
@@ -837,8 +948,13 @@ class CoordinatorIntegrationTests(unittest.TestCase):
         return {'number': 12}
 
     def test_development_freezes_checks_reviews_and_creates_one_pr(self):
-        executor.develop(self.store, self.state, self.policy, self.operator,
-                         self.policy['tasks'][0], 'a' * 32, 'unused')
+        previous = os.umask(0o077)
+        try:
+            executor.develop(self.store, self.state, self.policy, self.operator,
+                             self.policy['tasks'][0], 'a' * 32, 'unused')
+        finally:
+            os.umask(previous)
+        self.assertEqual((self.worker / 'work').stat().st_mode & 0o777, 0o755)
         entry = self.state['tasks']['documentation-maintenance']
         self.assertEqual(entry['pr'], 12)
         self.assertEqual(entry['status'], 'review')
