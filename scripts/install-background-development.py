@@ -51,7 +51,7 @@ def update_coordinator():
             if name not in COORDINATOR_UPDATE_PATHS:
                 raise ValueError('coordinator repair cannot change policy, dependencies, units or lab code')
             changes[name] = payload
-    for name in UNITS:
+    for name in (*UNITS, 'srv6-mup-background-test.service'):
         active = subprocess.check_output(
             ['systemctl', 'show', name, '--property=ActiveState', '--value'], text=True).strip()
         if active not in ('inactive', 'failed'):
