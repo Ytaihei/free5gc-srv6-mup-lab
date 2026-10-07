@@ -316,11 +316,27 @@ class WorkerDirectoryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'ownership or permissions'):
                 executor.worker_work_parent()
         self.assertEqual(parent.stat().st_mode & 0o777, 0o700)
-        for mode in (0o777, 0o775, 0o2755):
+        for mode in (0o777, 0o775):
             parent.chmod(mode)
             with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, 'ownership or permissions'):
                 executor.worker_work_parent()
             self.assertEqual(parent.stat().st_mode & 0o7777, mode)
+
+    def test_special_mode_parent_is_refused_without_setting_privileged_bits(self):
+        parent = self.home / 'work'
+        parent.mkdir(mode=0o700)
+        info = parent.stat()
+        # RestrictSUIDSGID forbids creating this fixture on disk. Supply only
+        # observed metadata; still exercise the real rejection before chmod.
+        for special in (0o1000, 0o2000, 0o4000):
+            with self.subTest(special=special), \
+                    patch.object(executor.os, 'fstat', return_value=SimpleNamespace(
+                        st_uid=info.st_uid, st_mode=info.st_mode | special)), \
+                    patch.object(executor.os, 'fchmod') as chmod:
+                with self.assertRaisesRegex(ValueError, 'ownership or permissions'):
+                    executor.worker_work_parent()
+                chmod.assert_not_called()
+            self.assertEqual(parent.stat().st_mode & 0o7777, 0o700)
 
     def test_workspace_probe_checks_parent_protection_and_scratch_io(self):
         for writable_parent in (False, True):
