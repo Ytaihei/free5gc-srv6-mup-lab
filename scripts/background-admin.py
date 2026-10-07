@@ -13,9 +13,9 @@ import sys
 import tempfile
 import uuid
 
-from background_development import Store, atomic_json, digest, safe_relative
+from background_development import Store, atomic_json, digest, load_policy, safe_relative
 from background_executor import (ACCOUNTS, INSTALL, ROOT, STATE, protected, service,
-                                 watchdog, worker_work_parent)
+                                 watchdog, worker_work_parent, launch_test_once, run)
 
 
 def directory_denied(path):
@@ -196,6 +196,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     sub.add_parser('watchdog')
+    sub.add_parser('test-once', help='launch one bounded code-only trial now; may create a PR')
+    sub.add_parser('_execute-test-once', help=argparse.SUPPRESS)
     sub.add_parser('probe-isolation', help='read-only probe for the isolated checks account')
     sub.add_parser('probe-workspace', help='scratch I/O probe for the isolated worker account')
     commission_parser = sub.add_parser('commission')
@@ -219,6 +221,12 @@ def main():
         if digest(INSTALL / name) != expected:
             raise ValueError('installation differs from the reviewed bytes')
     store = Store(STATE)
+    if args.action == 'test-once':
+        launch_test_once(store, load_policy())
+        return
+    if args.action == '_execute-test-once':
+        run(store, load_policy(), test_once=True)
+        return
     if args.action == 'watchdog':
         try:
             watchdog(store)

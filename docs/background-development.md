@@ -149,8 +149,9 @@ not validate that service. This loopback probe does not attest every address
 range, IPv6 path or live-lab operation.
 
 To apply a reviewed coordinator repair to an existing installation, first stop
-and disable both timers and stop the background service. From the reviewed
-checkout run:
+and disable both timers and stop the background service. If a single-run test
+is active, stop that service too and inspect/acknowledge any interrupted run
+before updating. The updater refuses an active test service. From the reviewed checkout run:
 
 ```bash
 sudo python3 scripts/install-background-development.py --apply --update-coordinator
@@ -196,8 +197,9 @@ service with no execution history, and passing offline tests are not evidence of
 an unattended development cycle. Keep automatic merging off until an actual
 isolated candidate, checks, review, PR and notification have been inspected.
 
-Starting the service manually still enforces the approved time window. There is
-no daytime deployment bypass. The worker receives one task; tests and an
+Starting the regular service manually still enforces the approved time window.
+The explicit code-only single-run mode below is separate; neither mode permits
+daytime live deployment. The worker receives one task; tests and an
 independent read-only review use the frozen candidate. The publisher opens a PR
 with a fixed, sanitized body. Resume after interrupted publication reuses the
 recorded branch/commit instead of opening duplicate PRs. At most three automation
@@ -226,6 +228,62 @@ receives a weekly queue summary and urgent failure notices, using only fixed tas
 IDs/statuses. Notification delivery still needs acceptance; GitHub outages retain
 a pending notice locally. There is no automatic cleanup, email or app-inbox
 notification. Until delivery is verified, check service state and PRs manually.
+
+## Immediate single-run test (code only)
+
+After installation, commissioning and `resume`, an operator can exercise one
+queued task immediately without editing the Mon/Wed/Fri timers or the policy:
+
+```bash
+sudo /opt/srv6-mup-background/venv/bin/python3 \
+  /opt/srv6-mup-background/scripts/background-admin.py test-once
+sudo journalctl -u srv6-mup-background-test.service -f
+```
+
+This is a real development run, not a dry run: it uses the configured model
+account and can create a public PR and update the fixed GitHub status issue.
+Only the calendar gate is replaced by a deadline 40 minutes after execution
+starts. The transient service has a 45-minute runtime limit and a 60-second stop
+timeout. Installed-source checks, commissioning, authentication, resource limits,
+failure limits, the shared lock, credential-free checks, independent review and
+publication checks remain in effect. A paused queue, interrupted run, no ready
+task, a selected task requiring live profiles or three open automation PRs blocks
+the trial. The PR limit also applies to resumed work. Automatic merging is forced
+off in memory, without modifying operator settings; live operations stay off.
+
+The launcher returns after service startup, **not after successful completion**.
+Concurrent tests use the same service name and cannot replace a running test.
+Scheduled development and the test use the same lock. The command changes no
+timer, persistent override, queue priority or model. `_execute-test-once` is an
+internal service entry point, not an operator command.
+
+The journal prints a private result path under
+`/var/lib/srv6-mup-background/trials/RUN_ID/result.json`. Inspect that exact file
+locally with sudo. It records the start/end times, fixed deadlines, last phase,
+task outcome, PR number when present, and final notification delivery. A
+`completed` result means the selected pipeline returned and its final status
+issue update succeeded; it does **not** attest asynchronous GitHub CI, a merge or
+live-lab validation. A retained publication can be resumed without rerunning the
+worker, and a no-change task ends as `needs-decision` without a PR. Those outcomes
+are not evidence of a fresh end-to-end candidate/check/review/PR cycle. Inspect
+the retained run evidence and exact PR checks before accepting that cycle.
+
+The final status report bypasses weekly deduplication but publishes only fixed
+task IDs/statuses, not private logs. A notification failure is recorded as a
+failed trial with notification pending, preserving any already-created PR. To
+stop a running test:
+
+```bash
+sudo systemctl stop srv6-mup-background-test.service
+```
+
+Stopping or timing out invokes the watchdog. An interrupted active run is kept
+and the queue is paused until operator inspection and exact-ID acknowledgement.
+An abrupt stop can leave `status: running` in the result file; that is incomplete
+evidence, never success. Child jobs retain their existing execution limits. Do
+not delete evidence or force-clear locks to retry. The journal and result are
+private operational evidence, not publication artifacts. Offline tests of this
+mode do not substitute for an actual isolated trial on the installed host.
 
 ## Merge rules and remaining acceptance
 

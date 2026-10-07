@@ -29,6 +29,252 @@ admin = importlib.util.module_from_spec(ADMIN_SPEC)
 ADMIN_SPEC.loader.exec_module(admin)
 
 
+class SingleRunTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = bg.Store(Path(self.temp.name) / 'state')
+        self.store.directory.mkdir(mode=0o700)
+        self.policy = bg.load_policy()
+        state = self.store.read()
+        state['paused'] = False
+        self.store.save(state)
+        self.operator = {'automatic_merge': True}
+        self.now = datetime(2026, 10, 8, 0, 0, tzinfo=timezone.utc)  # Thursday, outside schedule.
+        now = self.now
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now.astimezone(tz)
+        patches = [patch.object(executor, 'STATE', self.store.directory),
+                   patch.object(executor, 'datetime', Clock), patch.object(bg, 'datetime', Clock)]
+        for target, value in {
+                'readiness': self.operator, 'resources': {'memory_available_mib': 9000, 'disk_free_gib': 40},
+                'service': '', 'refresh_reviews': None, 'report': None, 'pull_requests': []}.items():
+            mocked = patch.object(executor, target, return_value=value)
+            setattr(self, target, mocked.start())
+            self.addCleanup(mocked.stop)
+        for mocked in patches:
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        mocked = patch.object(executor, 'develop', side_effect=self.development)
+        self.develop = mocked.start()
+        self.addCleanup(mocked.stop)
+
+    def development(self, store, state, policy, operator, task, run_id, deadline):
+        self.assertFalse(operator['automatic_merge'])
+        self.assertEqual(state['active']['mode'], 'test-once')
+        self.assertEqual(executor.WORK_DEADLINE, deadline)
+        state['tasks'][task['id']] = {'status': 'review', 'pr': 12}
+        store.save(state)
+
+    def result(self):
+        path, = (self.store.directory / 'trials').glob('*/result.json')
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+        return json.loads(path.read_text())
+
+    def test_calendar_override_is_one_run_only_and_merge_is_always_off(self):
+        executor.run(self.store, self.policy)
+        self.service.assert_not_called()
+        executor.run(self.store, self.policy, test_once=True)
+        self.develop.assert_called_once()
+        self.assertTrue(self.operator['automatic_merge'])  # Installed settings are unchanged.
+        self.assertFalse(self.refresh_reviews.call_args.args[3]['automatic_merge'])
+        self.assertEqual(self.report.call_args.kwargs, {'force': True})
+        result = self.result()
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['pr'], 12)
+        self.assertTrue(result['notification_delivered'])
+        for field, minutes in [('work_deadline', 40), ('recovery_deadline', 45)]:
+            self.assertEqual(datetime.fromisoformat(result['window'][field]), self.now + timedelta(minutes=minutes))
+        self.assertIsNone(executor.WORK_DEADLINE)
+        self.assertIsNone(self.store.read()['active'])
+        self.service.reset_mock()
+        executor.run(self.store, self.policy)
+        self.service.assert_not_called()
+
+    def test_non_calendar_safety_gates_remain_blocking(self):
+        cases = [({'paused': True}, 'paused'), ({'active': {'id': 'a' * 32}}, 'interrupted-run-needs-recovery'),
+                 ({'failures': 3}, 'failure-limit'),
+                 ({'tasks': {task['id']: {'status': 'complete'} for task in self.policy['tasks']}}, 'no-ready-task')]
+        original = self.store.read()
+        for changes, reason in cases:
+            with self.subTest(reason=reason):
+                self.store.save(dict(original, **changes))
+                with self.assertRaisesRegex(ValueError, reason):
+                    executor.run(self.store, self.policy, test_once=True)
+        self.develop.assert_not_called()
+        self.service.assert_not_called()
+
+    def test_scheduled_in_window_behavior_and_empty_queue_review_are_preserved(self):
+        real_window = bg.window(datetime(2026, 10, 9, 3, 10, tzinfo=bg.ZoneInfo('Asia/Tokyo')))
+        self.develop.side_effect = None
+        with patch.object(bg, 'window', return_value=real_window):
+            executor.run(self.store, self.policy)
+            self.develop.assert_called_once()
+            self.assertIs(self.develop.call_args.args[3], self.operator)
+            self.assertEqual(self.develop.call_args.args[-1], real_window['work_deadline'])
+            self.assertEqual(self.report.call_count, 1)  # No forced single-run report.
+            self.assertFalse((self.store.directory / 'trials').exists())
+            state = self.store.read()
+            state['tasks'] = {task['id']: {'status': 'complete'} for task in self.policy['tasks']}
+            self.store.save(state)
+            self.develop.reset_mock()
+            self.refresh_reviews.reset_mock()
+            executor.run(self.store, self.policy)
+            self.refresh_reviews.assert_called_once()
+            self.develop.assert_not_called()
+        self.assertIsNone(executor.WORK_DEADLINE)
+
+    def test_authentication_failure_pauses_and_preserves_private_phase(self):
+        self.service.side_effect = ValueError('authentication failed')
+        with self.assertRaisesRegex(ValueError, 'authentication failed'):
+            executor.run(self.store, self.policy, test_once=True)
+        self.assertEqual(self.result()['phase'], 'authentication')
+        self.assertEqual(self.result()['status'], 'failed')
+        self.assertTrue(self.store.read()['paused'])
+        self.assertTrue(self.store.read()['notification_pending'])
+        self.develop.assert_not_called()
+
+    def test_watchdog_retains_interrupted_single_run_until_acknowledgement(self):
+        state = self.store.read()
+        active = {'id': 'a' * 32, 'task': self.policy['tasks'][0]['id'],
+                  'kind': 'development', 'mode': 'test-once'}
+        state['active'] = active
+        self.store.save(state)
+        with patch.object(executor.subprocess, 'run') as stop:
+            executor.watchdog(self.store)
+        self.assertEqual(stop.call_args.args[0], ['systemctl', 'stop', 'srv6-mup-worker-' + 'a' * 32])
+        self.assertEqual(self.store.read()['active'], active)
+        self.assertTrue(self.store.read()['paused'])
+
+    def test_resources_live_tasks_and_expired_deadline_are_not_bypassed(self):
+        window = {'work_deadline': (self.now + timedelta(minutes=40)).isoformat()}
+        for key in ('memory_available_mib', 'disk_free_gib'):
+            self.resources.return_value[key] = 0
+            decision = executor.run_decision(self.store, self.policy, self.store.read(), window)
+            self.assertIn('insufficient-' + key.replace('_', '-'), decision['reasons'])
+        self.resources.return_value = {'memory_available_mib': 9000, 'disk_free_gib': 40}
+        self.policy['tasks'][0]['profiles'] = ['compact']
+        with self.assertRaisesRegex(ValueError, 'test-requires-code-only-task'):
+            executor.run(self.store, self.policy, test_once=True)
+        decision = executor.run_decision(self.store, self.policy, self.store.read(),
+                                         {'work_deadline': self.now.isoformat()})
+        self.assertIn('test-deadline-reached', decision['reasons'])
+        self.service.assert_not_called()
+
+    def test_open_pr_limit_even_for_resumed_work(self):
+        state = self.store.read()
+        state['tasks'][self.policy['tasks'][0]['id']] = {'status': 'working'}
+        self.store.save(state)
+        self.pull_requests.return_value = [{}, {}, {}]
+        with self.assertRaisesRegex(ValueError, 'open-pr-limit'):
+            executor.run(self.store, self.policy, test_once=True)
+        self.develop.assert_not_called()
+        self.assertEqual(self.result()['status'], 'blocked')
+
+    def test_fixed_deadline_is_rechecked_after_authentication(self):
+        real_decision = executor.run_decision
+        def decide(*args, **kwargs):
+            result = real_decision(*args, **kwargs)
+            if 'open_prs' in kwargs:
+                result.update(eligible=False, reasons=['test-deadline-reached'])
+            return result
+        with patch.object(executor, 'run_decision', side_effect=decide) as decision:
+            with self.assertRaisesRegex(ValueError, 'test-deadline-reached'):
+                executor.run(self.store, self.policy, test_once=True)
+        self.assertEqual(decision.call_args_list[0].args[3], decision.call_args_list[1].args[3])
+        self.develop.assert_not_called()
+
+    def test_readiness_and_lock_failure_do_not_start_any_work(self):
+        with self.store.locked(), self.assertRaisesRegex(ValueError, 'another background operation'):
+            executor.run(self.store, self.policy, test_once=True)
+        self.readiness.side_effect = ValueError('not commissioned')
+        with self.assertRaisesRegex(ValueError, 'not commissioned'):
+            executor.run(self.store, self.policy, test_once=True)
+        self.service.assert_not_called()
+        self.assertFalse((self.store.directory / 'trials').exists())
+
+    def test_failed_development_is_recorded_and_counts_toward_pause(self):
+        state = self.store.read()
+        state['failures'] = 2
+        self.store.save(state)
+        self.develop.side_effect = ValueError('check failed')
+        with self.assertRaisesRegex(ValueError, 'check failed'):
+            executor.run(self.store, self.policy, test_once=True)
+        self.assertEqual(self.result()['status'], 'failed')
+        self.assertEqual(self.store.read()['failures'], 3)
+        self.assertTrue(self.store.read()['paused'])
+        self.assertIsNone(self.store.read()['active'])
+        self.assertIsNone(executor.WORK_DEADLINE)
+
+    def test_failed_notification_does_not_claim_complete_or_lose_pr(self):
+        self.report.side_effect = [None, ValueError('offline'), ValueError('offline')]
+        with self.assertRaisesRegex(ValueError, 'offline'):
+            executor.run(self.store, self.policy, test_once=True)
+        result = self.result()
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['pr'], 12)
+        self.assertFalse(result['notification_delivered'])
+        self.assertTrue(self.store.read()['notification_pending'])
+
+    def test_launcher_uses_fixed_capped_service_without_changing_timers(self):
+        original = self.store.path.read_bytes()
+        with patch.object(executor.subprocess, 'run') as command:
+            executor.launch_test_once(self.store, self.policy)
+        argv = command.call_args.args[0]
+        self.assertEqual(argv[0], 'systemd-run')
+        for value in ('--unit=srv6-mup-background-test.service', 'RuntimeMaxSec=45min',
+                      'UMask=0077', 'ProtectSystem=strict', 'KillMode=control-group',
+                      'TimeoutStopSec=60', '_execute-test-once'):
+            self.assertIn(value, argv)
+        self.assertNotIn('--wait', argv)
+        self.assertFalse(any('.timer' in value for value in argv))
+        self.assertEqual(self.store.path.read_bytes(), original)
+        self.assertTrue(command.call_args.kwargs['check'])
+
+    def test_launcher_refuses_paused_queue_and_propagates_duplicate_unit_failure(self):
+        with patch.object(executor.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'systemd-run')):
+            with self.assertRaises(subprocess.CalledProcessError):
+                executor.launch_test_once(self.store, self.policy)
+        state = self.store.read()
+        state['paused'] = True
+        self.store.save(state)
+        with patch.object(executor.subprocess, 'run') as command:
+            with self.assertRaisesRegex(ValueError, 'paused'):
+                executor.launch_test_once(self.store, self.policy)
+            command.assert_not_called()
+
+    def test_admin_entrypoints_refuse_ordinary_checkout(self):
+        for action in ('test-once', '_execute-test-once'):
+            result = subprocess.run([sys.executable, str(ROOT / 'scripts/background-admin.py'), action],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('root-owned installed administration tool', result.stderr)
+
+
+class SingleRunNotificationTests(unittest.TestCase):
+    def test_final_trial_report_bypasses_weekly_deduplication_without_raw_output(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = bg.Store(root)
+            state = store.read()
+            state['report_issue'] = 8
+            state['last_result'] = 'PRIVATE LOG MUST NOT BE PUBLISHED'
+            policy = bg.load_policy()
+            with patch.object(executor, 'github', return_value={}) as github:
+                executor.report(store, state, policy)
+                executor.report(store, state, policy)
+                self.assertEqual(github.call_count, 1)
+                executor.report(store, state, policy, force=True)
+                self.assertEqual(github.call_count, 2)
+                args = github.call_args.args
+                self.assertTrue(args[1].endswith('/issues/8'))
+                self.assertEqual(args[2], 'PATCH')
+                self.assertIn('Single-run test result.', args[3]['body'])
+                self.assertNotIn('PRIVATE LOG', args[3]['body'])
+
+
 class IsolationProbeTests(unittest.TestCase):
     def test_existing_masked_directory_is_denied(self):
         with tempfile.TemporaryDirectory() as root:
@@ -414,6 +660,14 @@ class CoordinatorUpdateTests(unittest.TestCase):
     def test_changed_installed_file_refused_before_writes(self):
         (self.install / self.files[0]).write_text('unexpected edit\n')
         with self.assertRaisesRegex(ValueError, 'differ from their manifest'):
+            installer.update_coordinator()
+        self.assertFalse((self.store.directory / 'updates').exists())
+
+    def test_active_single_run_blocks_coordinator_update(self):
+        self.command.side_effect = lambda argv, **kwargs: (
+            'active\n' if executor.TEST_UNIT in argv else
+            'disabled\n' if '--property=UnitFileState' in argv else 'inactive\n')
+        with self.assertRaisesRegex(ValueError, 'stop'):
             installer.update_coordinator()
         self.assertFalse((self.store.directory / 'updates').exists())
 
@@ -994,6 +1248,29 @@ class CoordinatorIntegrationTests(unittest.TestCase):
         self.assertEqual(entry['head'], first_head)
         self.assertEqual(entry['branch'], first_branch)
         self.assertFalse(any(event[0] == 'worker' for event in self.events))
+
+    def test_single_run_uses_real_development_checks_review_and_publication_pipeline(self):
+        self.state['paused'] = False
+        self.store.save(self.state)
+        operator = dict(self.operator, automatic_merge=True)
+        def service(role, argv, **kwargs):
+            if argv[-2:] in (['login', 'status'], ['auth', 'status']):
+                return ''
+            return self.service(role, argv, **kwargs)
+        with patch.object(executor, 'readiness', return_value=operator), \
+                patch.object(executor, 'service', side_effect=service), \
+                patch.object(executor, 'resources', return_value={'memory_available_mib': 9000, 'disk_free_gib': 40}), \
+                patch.object(executor, 'refresh_reviews') as review, \
+                patch.object(executor, 'report') as report:
+            executor.run(self.store, self.policy, test_once=True)
+        self.assertFalse(review.call_args.args[3]['automatic_merge'])
+        self.assertTrue(operator['automatic_merge'])
+        self.assertEqual(len([event for event in self.events if event[0] == 'checks']), 5)
+        self.assertEqual(len([event for event in self.events if event[0] == 'worker']), 2)
+        self.assertEqual(self.store.read()['tasks']['documentation-maintenance']['pr'], 12)
+        self.assertEqual(report.call_args.kwargs, {'force': True})
+        path, = (self.state_dir / 'trials').glob('*/result.json')
+        self.assertEqual(json.loads(path.read_text())['status'], 'completed')
 
 
 if __name__ == '__main__':

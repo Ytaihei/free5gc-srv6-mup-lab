@@ -6,7 +6,7 @@ file before credentials, GitHub writes, or generated code can be used.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 import os
@@ -30,6 +30,7 @@ ACCOUNTS = {'worker': 'mup-bg-worker', 'checks': 'mup-bg-checks', 'publisher': '
 HOMES = {role: Path('/var/lib') / account for role, account in ACCOUNTS.items()}
 PRIVATE_NETS = '127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 ::1/128 fc00::/7 fe80::/10'
 WORK_DEADLINE = None
+TEST_UNIT = 'srv6-mup-background-test.service'
 REVIEW_SCHEMA = {'type': 'object', 'additionalProperties': False,
                  'properties': {key: {'type': 'boolean'} for key in
                                 ('review_passed', 'translation_checked', 'decision_required',
@@ -306,10 +307,10 @@ def refresh_reviews(store, state, policy, operator):
     store.save(state)
 
 
-def report(store, state, policy, *, urgent=False):
+def report(store, state, policy, *, urgent=False, force=False):
     """One retained GitHub issue, fixed enum/count output, never raw job logs."""
     week = datetime.now(ZoneInfo('Asia/Tokyo')).strftime('%G-W%V')
-    if not urgent and state.get('reported_week') == week:
+    if not urgent and not force and state.get('reported_week') == week:
         return
     allowed = {'queued', 'working', 'review', 'validation', 'needs-decision', 'complete'}
     lines = ['Background development status', '',
@@ -321,7 +322,8 @@ def report(store, state, policy, *, urgent=False):
             raise ValueError('unknown task state in report')
         lines.append(f"- `{task['id']}`: {status}")
     lines += ['', 'Scheduler: ' + ('paused' if state['paused'] else 'enabled'),
-              'Operator attention required.' if urgent else 'Weekly queue summary.',
+              'Operator attention required.' if urgent else
+              ('Single-run test result.' if force else 'Weekly queue summary.'),
               'Raw evidence and host details remain private.']
     endpoint = f"repos/{policy['repository']}/issues"
     number = state.get('report_issue')
@@ -511,59 +513,154 @@ def develop(store, state, policy, operator, task, run_id, deadline):
     publish(store, state, policy, task['id'], entry)
 
 
-def run(store, policy):
+def run_decision(store, policy, state, test_window=None, *, open_prs=0):
+    decision = plan(policy, state, resources(store.directory), open_prs=open_prs)
+    if test_window is not None:
+        # Only the calendar gate changes; no fake clock or persistent override.
+        reasons = [reason for reason in decision['reasons'] if reason != 'outside-work-window']
+        if datetime.now(ZoneInfo('UTC')) >= datetime.fromisoformat(test_window['work_deadline']):
+            reasons.append('test-deadline-reached')
+        task = select_task(policy, state)
+        if task and task['profiles']:
+            reasons.append('test-requires-code-only-task')
+        if open_prs >= policy['limits']['open_prs'] and 'open-pr-limit' not in reasons:
+            reasons.append('open-pr-limit')
+        decision.update({'reasons': reasons, 'eligible': not reasons, 'window': test_window})
+    return decision
+
+
+def launch_test_once(store, policy):
+    readiness(store, policy)
+    # Reject paused/interrupted/failed queues before launching; the child checks
+    # all gates again after acquiring the same lock as scheduled development.
+    with store.locked():
+        deadline = (datetime.now(ZoneInfo('UTC')) + timedelta(minutes=40)).isoformat()
+        decision = run_decision(store, policy, store.read(), {'work_deadline': deadline})
+        if not decision['eligible']:
+            raise ValueError('single-run test refused: ' + ', '.join(decision['reasons']))
+    properties = {
+        'User': 'root', 'UMask': '0077', 'WorkingDirectory': str(INSTALL),
+        'RuntimeMaxSec': '45min', 'TimeoutStopSec': '60', 'KillMode': 'control-group',
+        'Nice': '10', 'IOSchedulingClass': 'idle', 'ProtectSystem': 'strict',
+        'ProtectHome': 'yes', 'PrivateTmp': 'yes',
+        'ReadWritePaths': ' '.join(map(str, [STATE, *HOMES.values(), INSTALL / 'candidates'])),
+        'ExecStopPost': f'{INSTALL}/venv/bin/python3 {INSTALL}/scripts/background-admin.py watchdog',
+    }
+    command = ['systemd-run', '--collect', '--service-type=exec', '--unit=' + TEST_UNIT]
+    for key, value in properties.items():
+        command += ['--property', f'{key}={value}']
+    command += ['--', str(INSTALL / 'venv/bin/python3'),
+                str(INSTALL / 'scripts/background-admin.py'), '_execute-test-once']
+    subprocess.run(command, check=True, timeout=30,
+                   env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'})
+    print('Started ' + TEST_UNIT + '; this is not a completed test. Inspect its journal and private trial result.')
+
+
+def run(store, policy, *, test_once=False):
     global WORK_DEADLINE
     operator = readiness(store, policy)
+    if test_once:
+        operator = dict(operator, automatic_merge=False)
     with store.locked():
         state = store.read()
-        decision = plan(policy, state, resources(store.directory))
-        if set(decision['reasons']) - {'no-ready-task'}:
-            print(json.dumps(decision))
-            return
-        # Authentication failures are errors, not an invitation to use another
-        # account, API billing, wider permissions or an unrelated host.
-        WORK_DEADLINE = decision['window']['work_deadline']
-        try:
-            service('worker', [INSTALL / 'bin/codex', 'login', 'status'], seconds=30)
-            service('publisher', ['gh', 'auth', 'status'], seconds=30)
-            refresh_reviews(store, state, policy, operator)
-            report(store, state, policy, urgent=bool(state.get('notification_pending')))
-            state['notification_pending'] = False
-            opened = pull_requests(policy)
-        except (ValueError, OSError, subprocess.SubprocessError):
-            state['paused'] = True
-            state['notification_pending'] = True
-            state['last_result'] = public_summary('coordinator', 'blocked')
-            store.save(state)
-            WORK_DEADLINE = None
-            raise
-        decision = plan(policy, state, resources(store.directory), open_prs=len(opened))
-        if not decision['eligible']:
-            print(json.dumps(decision))
-            WORK_DEADLINE = None
-            return
-        task = select_task(policy, state)
         run_id = uuid.uuid4().hex
-        state['active'] = {'id': run_id, 'task': task['id'], 'kind': 'development',
-                           'started': datetime.now(ZoneInfo('UTC')).isoformat()}
-        store.save(state)
+        started = datetime.now(ZoneInfo('UTC'))
+        test_window = None
+        result_path = None
+        result = {'mode': 'test-once', 'run_id': run_id, 'status': 'running', 'started': started.isoformat(),
+                  'automatic_merge': False, 'lab_enabled': False, 'notification_delivered': False}
+        if test_once:
+            test_window = {'work': True, 'recovery': True,
+                           'work_deadline': (started + timedelta(minutes=40)).isoformat(),
+                           'recovery_deadline': (started + timedelta(minutes=45)).isoformat()}
+            result['window'] = test_window
+            directory = STATE / 'trials' / run_id
+            directory.mkdir(parents=True, mode=0o700)
+            result_path = directory / 'result.json'
+            atomic_json(result_path, result)
+            print('Private single-run result: ' + str(result_path), flush=True)
         try:
-            develop(store, state, policy, operator, task, run_id, decision['window']['work_deadline'])
-            state['failures'] = 0
+            _run_locked(store, policy, state, operator, run_id, test_window, result)
         except (ValueError, OSError, subprocess.SubprocessError):
-            state['failures'] += 1
-            state['last_result'] = public_summary(task['id'], 'failed')
-            if state['failures'] >= policy['limits']['consecutive_failures']:
-                state['paused'] = True
-            try:
-                report(store, state, policy, urgent=True)
-            except (ValueError, OSError, subprocess.SubprocessError):
-                state['notification_pending'] = True
+            if result['status'] != 'blocked':
+                result['status'] = 'failed'
             raise
         finally:
-            state['active'] = None
-            store.save(state)
             WORK_DEADLINE = None
+            if result_path:
+                result['finished'] = datetime.now(ZoneInfo('UTC')).isoformat()
+                atomic_json(result_path, result)
+                print('Single-run status: ' + result['status'], flush=True)
+
+
+def _run_locked(store, policy, state, operator, run_id, test_window, result):
+    global WORK_DEADLINE
+    decision = run_decision(store, policy, state, test_window)
+    if decision['reasons'] and (test_window is not None or set(decision['reasons']) - {'no-ready-task'}):
+        result.update({'status': 'blocked', 'reasons': decision['reasons']})
+        if test_window is not None:
+            raise ValueError('single-run test refused: ' + ', '.join(decision['reasons']))
+        print(json.dumps(decision))
+        return
+    # Authentication failures never authorize a different account or billing path.
+    WORK_DEADLINE = decision['window']['work_deadline']
+    try:
+        result['phase'] = 'authentication'
+        service('worker', [INSTALL / 'bin/codex', 'login', 'status'], seconds=30)
+        service('publisher', ['gh', 'auth', 'status'], seconds=30)
+        result['phase'] = 'review-refresh'
+        refresh_reviews(store, state, policy, operator)
+        report(store, state, policy, urgent=bool(state.get('notification_pending')))
+        state['notification_pending'] = False
+        opened = pull_requests(policy)
+    except (ValueError, OSError, subprocess.SubprocessError):
+        state['paused'] = True
+        state['notification_pending'] = True
+        state['last_result'] = public_summary('coordinator', 'blocked')
+        store.save(state)
+        raise
+    decision = run_decision(store, policy, state, test_window, open_prs=len(opened))
+    if not decision['eligible']:
+        result.update({'status': 'blocked', 'reasons': decision['reasons']})
+        if test_window is not None:
+            raise ValueError('single-run test refused: ' + ', '.join(decision['reasons']))
+        print(json.dumps(decision))
+        return
+    task = select_task(policy, state)
+    result['task'] = task['id']
+    state['active'] = {'id': run_id, 'task': task['id'], 'kind': 'development',
+                       'started': datetime.now(ZoneInfo('UTC')).isoformat()}
+    if test_window is not None:
+        state['active']['mode'] = 'test-once'
+    store.save(state)
+    try:
+        result['phase'] = 'development-checks-review-publication'
+        develop(store, state, policy, operator, task, run_id, decision['window']['work_deadline'])
+        if test_window is not None:
+            entry = state['tasks'][task['id']]
+            result.update({'outcome': entry['status'], 'pr': entry.get('pr'), 'phase': 'notification'})
+            try:
+                report(store, state, policy, force=True)
+            except (ValueError, OSError, subprocess.SubprocessError):
+                state['notification_pending'] = True
+                raise
+            state['notification_pending'] = False
+            result['notification_delivered'] = True
+        result['status'] = 'completed'
+        state['failures'] = 0
+    except (ValueError, OSError, subprocess.SubprocessError):
+        state['failures'] += 1
+        state['last_result'] = public_summary(task['id'], 'failed')
+        if state['failures'] >= policy['limits']['consecutive_failures']:
+            state['paused'] = True
+        try:
+            report(store, state, policy, urgent=True)
+        except (ValueError, OSError, subprocess.SubprocessError):
+            state['notification_pending'] = True
+        raise
+    finally:
+        state['active'] = None
+        store.save(state)
 
 
 def watchdog(store):
