@@ -42,13 +42,21 @@ sudoと、既存の信頼するCodexおよび固定版Goの導入先が必要で
 
 ```bash
 sudo python3 scripts/install-background-development.py --apply \
-  --codex /absolute/path/to/codex --go-root /absolute/path/to/pinned-go
+  --codex /absolute/path/to/package/bin/codex --go-root /absolute/path/to/pinned-go
 ```
 
 3つの専用アカウント、前提パッケージ、root所有の`/opt/srv6-mup-background`、
 非公開状態の`/var/lib/srv6-mup-background`を作成します。既存のアカウント・
 unit・導入先・状態があれば上書きせず拒否します。部分的な導入も保持するため、
 無確認で削除して再実行しないでください。両timerは有効化しません。
+
+Codex本体だけのコピーではなく、Codex 0.154.0 Linux x86-64の完全なstandalone
+パッケージを指定します。導入処理は`bin/codex`、`bin/codex-code-mode-host`、
+`codex-package.json`、`codex-path/rg`、`codex-resources/bwrap`、
+`codex-resources/zsh/bin/zsh`を固定SHA-256で検証します。この固定値は確認した信頼済み
+パッケージのバイト列を示し、上流の署名検証ではありません。6ファイルすべてを非公開の
+導入マニフェストに記録し、開発前にも検証します。ソースのみを公開する本リポジトリには
+追加しません。自動ダウンロード、バージョン更新、モデル変更、認証情報のコピーは行いません。
 
 **導入前に**unitファイルだけをコピーしてtimerを有効化した場合、timer一覧に
 表示されても開発処理が動く証拠にはなりません。`/opt`の実行ファイルが存在しない
@@ -75,7 +83,7 @@ sudo -u mup-bg-publisher -H gh auth login --hostname github.com --git-protocol h
 渡しません。試験は両方の認証を持たない3つ目のアカウントで実行します。
 モデル実行は認証したCodexアカウントの利用枠を消費し、API課金への自動切り替えはありません。
 
-導入確認ではアカウント分離・認証・ソース検査を確認します。公開コミットに使用する
+導入確認ではアカウント分離・認証・モデルを介した実際のツール実行・ソース検査を確認します。公開コミットに使用する
 作成者情報を明示してください。
 
 ```bash
@@ -92,7 +100,7 @@ sudo /opt/srv6-mup-background/venv/bin/python3 \
 
 ### 導入確認の失敗と管理処理の修正
 
-導入確認は`worker-auth`、`publisher-auth`、`isolation-probe`、`worker-workspace`、`source-checks`の
+導入確認は`worker-auth`、`publisher-auth`、`isolation-probe`、`worker-workspace`、`worker-tools`、`source-checks`の
 段階ごとに記録します。各試行は`/var/lib/srv6-mup-background/commissioning/`配下の
 非公開ディレクトリへ`result.json`と権限0600のログを保存します。エラーには失敗した
 段階とログの絶対パスを表示します。ログはローカルで確認し、認証出力を公開しないで
@@ -103,6 +111,13 @@ sudo /opt/srv6-mup-background/venv/bin/python3 \
 読み書きを確認します。モデル呼び出し、デプロイ、公開は行いません。開発用チェック
 アウトと同じ親ディレクトリ配下に、worker所有の検査用ディレクトリを新規作成して
 保持し、その場所を`result.json`に記録します。
+
+`worker-tools`段階はパッケージを検証し、その新しい検査用ディレクトリで、同じworkerの
+隔離設定の下、設定済みCodexモデルを最大180秒呼び出します。プロセスの正常終了やモデルの
+成功宣言だけでなく、新しく生成した検証値を含む非公開ファイルの作成を要求します。
+認証済みアカウントのモデル利用枠を消費しますが、開発用チェックアウトの調査、デプロイ、
+公開、マージは行いません。補助プログラムの欠如、不正なイベント列・エラー、作成物の欠如・
+不一致があれば導入確認は失敗し、キューを停止したままにします。
 
 workerの`200/CHDIR`エラーは、root所有の作業用親ディレクトリが、作成時に`0755`を
 指定しても、管理サービスの`UMask=0077`によって`0700`になった場合に発生します。
@@ -152,11 +167,48 @@ sudo python3 scripts/install-background-development.py --apply --update-coordina
 
 この限定更新は導入済みマニフェストの全ハッシュを検証し、管理・実行・導入スクリプト、
 その試験、日英の手順書と翻訳ハッシュだけを受け入れます。公開一覧の変更は拒否し、
-ポリシー、unit、依存、ツール、ラボコードは更新しません。旧ファイルとマニフェストを
+ポリシー、unit、依存、ツールの版、ラボコードは更新しません。旧ファイルとマニフェストを
 非公開の`updates/`配下へ保持し、アカウント・認証・タスクの証跡を維持したまま、
 台帳を停止し、導入確認・自動マージを無効にします。再開前に`commission`を再実行
 してください。更新が途中で止まった場合もバックアップを保持し、検証を通過できなく
 なります。導入先・状態の削除や、マニフェストの編集による迂回はしないでください。
+
+`bin/codex`だけがある旧導入環境では、管理処理の修正と合わせて、固定版の不足する
+同梱ファイルの復元を明示的に指定します。
+
+```bash
+sudo python3 scripts/install-background-development.py --apply --update-coordinator \
+  --codex-package /absolute/path/to/package
+```
+
+既存のCodex本体が固定パッケージと一致している必要があります。追加できるのは不足している
+ハッシュ一致の同梱ファイルだけで、別のツールへの置換や、部分修復で残った未管理ファイルの
+引取りは行いません。追加一覧をバックアップとともに記録し、最後に導入マニフェストを更新
+します。上記同様にtimer・サービスを停止してから実行し、再開前に導入確認を行ってください。
+パッケージ指定なしの`--update-coordinator`が不足ツールを暗黙に導入することはありません。
+
+workerとレビューの標準出力は`worker.jsonl`・`review.jsonl`に、診断出力は別の
+`worker.jsonl.stderr.log`・`review.jsonl.stderr.log`に保存します。すべて権限0600の
+非公開証跡です。管理処理は、不正・不完全なJSONL、最上位のエラー、失敗したturn、error項目を
+拒否します。終了コードが0、またはその後に`turn.completed`があっても同じです。こうした
+worker実行エラーでは試験を失敗とし、キューを即時停止します。エラーなく会話が終わっただけで
+タスク達成の証明とはしません。旧版の混在ログは変更せず保持し、JSONLとして直接解析しないで
+ください。[公式の出力・イベント仕様](https://learn.chatgpt.com/docs/non-interactive-mode)も参照してください。
+
+旧版で変更なしとなった試験の原因を修正した後、運用者はキュー停止中に、その未公開・コードのみの
+タスクを正確に指定して再試行できます。
+
+```bash
+sudo /opt/srv6-mup-background/venv/bin/python3 \
+  /opt/srv6-mup-background/scripts/background-admin.py retry-task \
+  --task documentation-maintenance --run EXACT_RUN_ID
+```
+
+保持された該当試験の結果が`needs-decision`で、PRや公開処理の記録がないことを要求します。
+チェックアウト、基準コミット、編集内容、元のログ・結果を維持し、再試行を記録して既存作業を
+優先します。失敗回数のリセットやキューの再開は行いません。稼働中の作業、実機タスク、
+公開済み候補、証跡の不一致、同じ試験IDの再使用は拒否します。導入確認とこの明示的な再試行
+指定が成功してから`resume`・`test-once`を使い、新しい証跡で開発の一巡を確認してください。
 
 ## 実行・停止・確認
 
@@ -248,7 +300,8 @@ sudo journalctl -u srv6-mup-background-test.service -f
 固定期限、最終工程、タスクの結果、存在する場合のPR番号、最終通知の到達を記録します。
 `completed`は選択した処理が終了し、最後のステータスIssue更新が成功したことを示します。
 非同期のGitHub CI、マージ、実機ラボ検証の完了は意味しません。保持した公開処理の再開では
-ワーカーを再実行しない場合があり、変更なしのタスクはPRを作らず`needs-decision`になります。
+ワーカーを再実行しない場合があり、変更なしの場合はタスク・試験ともにPRを作らず
+`needs-decision`となり、`completed`にはしません。過去の結果を遡って書き換えることはありません。
 これらは新しい候補作成・検査・レビュー・PR作成の一巡の証明ではありません。一巡の受け入れ
 前に、保持した実行証跡と該当PRの検査結果を確認してください。
 

@@ -7,6 +7,7 @@ import importlib.util
 import json
 import io
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -219,6 +220,23 @@ class SingleRunTests(unittest.TestCase):
         self.assertFalse(result['notification_delivered'])
         self.assertTrue(self.store.read()['notification_pending'])
 
+    def test_tool_error_pauses_immediately_even_with_zero_previous_failures(self):
+        self.develop.side_effect = executor.WorkerExecutionError('tool unavailable')
+        with self.assertRaisesRegex(ValueError, 'tool unavailable'):
+            executor.run(self.store, self.policy, test_once=True)
+        self.assertTrue(self.store.read()['paused'])
+        self.assertEqual(self.store.read()['failures'], 1)
+        self.assertEqual(self.result()['status'], 'failed')
+
+    def test_no_change_outcome_is_not_a_completed_trial(self):
+        def no_change(store, state, policy, operator, task, *args):
+            state['tasks'][task['id']] = {'status': 'needs-decision'}
+        self.develop.side_effect = no_change
+        executor.run(self.store, self.policy, test_once=True)
+        self.assertEqual(self.result()['status'], 'needs-decision')
+        self.assertTrue(self.result()['notification_delivered'])
+        self.assertIsNone(self.result()['pr'])
+
     def test_launcher_uses_fixed_capped_service_without_changing_timers(self):
         original = self.store.path.read_bytes()
         with patch.object(executor.subprocess, 'run') as command:
@@ -393,6 +411,9 @@ class CommissioningTests(unittest.TestCase):
         mocked = patch.object(admin, 'protected')
         mocked.start()
         self.addCleanup(mocked.stop)
+        mocked = patch.object(admin, 'verify_codex_bundle')
+        mocked.start()
+        self.addCleanup(mocked.stop)
         for attribute, value in [('INSTALL', self.install), ('STATE', self.store.directory)]:
             mocked = patch.object(admin, attribute, value)
             mocked.start()
@@ -400,13 +421,18 @@ class CommissioningTests(unittest.TestCase):
 
     def service(self, role, command, **kwargs):
         Path(kwargs['output_file']).write_text('private diagnostic output\n')
+        if kwargs.get('json_events'):
+            challenge = re.search(r'[0-9a-f]{32}', kwargs['input_text']).group()
+            (kwargs['cwd'] / 'tool-probe.txt').write_text(challenge)
 
     def test_every_phase_has_retained_evidence_and_success_remains_paused(self):
         with patch.object(admin, 'service', side_effect=self.service) as service:
             admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
-        self.assertEqual(service.call_count, 5)
+        self.assertEqual(service.call_count, 6)
         report = next((self.store.directory / 'commissioning').glob('*/result.json'))
         self.assertTrue(json.loads(report.read_text())['complete'])
+        self.assertEqual(json.loads(report.read_text())['phases']['worker-tools'], 'passed')
+        self.assertTrue((report.parent / 'worker-tools.jsonl').exists())
         source_tree = Path(json.loads(report.read_text())['source_tree'])
         self.assertEqual(service.call_args.kwargs['cwd'], source_tree)
         self.assertEqual(service.call_args.args[0], 'checks')
@@ -476,7 +502,7 @@ class CommissioningTests(unittest.TestCase):
         with patch.object(admin, 'service', side_effect=self.service) as service:
             with self.assertRaisesRegex(ValueError, 'source-checks failed; inspect private log'):
                 admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
-        self.assertEqual(service.call_count, 4)
+        self.assertEqual(service.call_count, 5)
         report = next((self.store.directory / 'commissioning').glob('*/result.json'))
         result = json.loads(report.read_text())
         self.assertEqual(result['phases']['source-checks'], 'failed')
@@ -506,6 +532,41 @@ class CommissioningTests(unittest.TestCase):
         self.assertTrue((report.parent / 'worker-workspace.log').is_file())
         self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
         self.assertTrue(self.store.read()['paused'])
+
+    def test_tool_probe_requires_real_artifact_not_successful_exit_or_claim(self):
+        def no_artifact(role, command, **kwargs):
+            Path(kwargs['output_file']).write_text('claims success, but created nothing\n')
+        with patch.object(admin, 'service', side_effect=no_artifact):
+            with self.assertRaisesRegex(ValueError, 'worker-tools failed'):
+                admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
+        result = json.loads(next((self.store.directory / 'commissioning').glob('*/result.json')).read_text())
+        self.assertEqual(result['phases']['worker-tools'], 'failed')
+        self.assertNotIn('source-checks', result['phases'])
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+
+    def test_missing_bundle_blocks_tool_probe_and_commissioning(self):
+        with patch.object(admin, 'verify_codex_bundle', side_effect=ValueError('missing bundle')), \
+                patch.object(admin, 'service', side_effect=self.service) as service:
+            with self.assertRaisesRegex(ValueError, 'worker-tools failed'):
+                admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
+        self.assertEqual(service.call_count, 4)
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+
+    def test_tool_probe_refuses_wrong_contents_and_symlinks(self):
+        workspace = self.worker / 'probe'
+        workspace.mkdir()
+        evidence = self.root / 'evidence'
+        evidence.mkdir()
+        def wrong(role, argv, **kwargs):
+            (workspace / 'tool-probe.txt').write_text('wrong')
+        with patch.object(admin, 'service', side_effect=wrong):
+            with self.assertRaisesRegex(ValueError, 'expected private artifact'):
+                admin.commissioning_tools(workspace, evidence, 'retained-model')
+        (workspace / 'tool-probe.txt').unlink()
+        (workspace / 'tool-probe.txt').symlink_to(self.install / 'operator.json')
+        with patch.object(admin, 'service'):
+            with self.assertRaises(OSError):
+                admin.commissioning_tools(workspace, evidence, 'retained-model')
 
 
 class WorkerDirectoryTests(unittest.TestCase):
@@ -656,6 +717,97 @@ class CoordinatorUpdateTests(unittest.TestCase):
         self.assertFalse(operator['automatic_merge'])
         self.assertTrue(self.store.read()['paused'])
         self.assertEqual(self.store.read()['tasks'], {'example': {'status': 'queued'}})
+
+    def package_fixture(self):
+        package = self.root / 'package'
+        pins = {}
+        for name in executor.CODEX_FILES:
+            path = package / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((self.install / 'bin/codex').read_bytes() if name == 'bin/codex' else name.encode())
+            pins[name] = bg.digest(path)
+        return package, pins
+
+    def test_explicit_package_repair_adds_only_pinned_companions_and_retains_main_tool(self):
+        package, pins = self.package_fixture()
+        original = (self.install / 'bin/codex').read_bytes()
+        with patch.object(installer, 'CODEX_FILES', pins):
+            installer.update_coordinator(package)
+            installer.update_coordinator(package)  # Complete repaired manifests remain supported.
+        manifest = json.loads((self.install / 'installation.json').read_text())['files']
+        self.assertEqual(set(manifest), set(self.files) | set(pins) | {'review-schema.json'})
+        for name, expected in pins.items():
+            self.assertEqual(bg.digest(self.install / name), expected)
+            if name != 'bin/codex':
+                self.assertEqual((self.install / name).stat().st_mode & 0o777,
+                                 0o644 if name == 'codex-package.json' else 0o755)
+        self.assertEqual((self.install / 'bin/codex').read_bytes(), original)
+        added = json.loads(next((self.store.directory / 'updates').glob('*/added-files.json')).read_text())
+        self.assertEqual(set(added), set(pins) - {'bin/codex'})
+        self.assertTrue(self.store.read()['paused'])
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+
+    def test_wrong_package_and_untracked_helper_refused_before_state_changes(self):
+        package, pins = self.package_fixture()
+        helper = package / 'bin/codex-code-mode-host'
+        original = helper.read_bytes()
+        helper.write_text('wrong version')
+        with patch.object(installer, 'CODEX_FILES', pins):
+            with self.assertRaisesRegex(ValueError, 'reviewed 0.154.0'):
+                installer.update_coordinator(package)
+            helper.write_bytes(original)
+            (self.install / 'bin/codex-code-mode-host').write_text('untracked retained file')
+            with self.assertRaisesRegex(ValueError, 'untracked package entry retained'):
+                installer.update_coordinator(package)
+        self.assertFalse((self.store.directory / 'updates').exists())
+        self.assertTrue(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+
+    def test_package_repair_cannot_replace_different_installed_codex(self):
+        package, pins = self.package_fixture()
+        (package / 'bin/codex').write_text('other tool')
+        pins['bin/codex'] = bg.digest(package / 'bin/codex')
+        with patch.object(installer, 'CODEX_FILES', pins):
+            with self.assertRaisesRegex(ValueError, 'cannot replace the installed Codex'):
+                installer.update_coordinator(package)
+        self.assertFalse((self.store.directory / 'updates').exists())
+
+    def test_package_links_are_rejected_even_if_bytes_match(self):
+        package, pins = self.package_fixture()
+        helper = package / 'bin/codex-code-mode-host'
+        target = self.root / 'outside'
+        helper.rename(target)
+        helper.symlink_to(target)
+        with patch.object(installer, 'CODEX_FILES', pins):
+            with self.assertRaisesRegex(ValueError, 'plain files'):
+                installer.codex_package_payloads(package)
+
+    def test_partial_package_write_retains_evidence_and_revokes_commissioning(self):
+        package, pins = self.package_fixture()
+        original_manifest = (self.install / 'installation.json').read_bytes()
+        real_open = installer.os.open
+        def fail(path, *args, **kwargs):
+            if Path(path) == self.install / 'codex-path/rg':
+                raise OSError('simulated package write failure')
+            return real_open(path, *args, **kwargs)
+        with patch.object(installer, 'CODEX_FILES', pins), patch.object(installer.os, 'open', side_effect=fail):
+            with self.assertRaisesRegex(OSError, 'package write failure'):
+                installer.update_coordinator(package)
+        self.assertEqual((self.install / 'installation.json').read_bytes(), original_manifest)
+        self.assertTrue((self.install / 'bin/codex-code-mode-host').is_file())
+        self.assertTrue(list((self.store.directory / 'updates').glob('*/added-files.json')))
+        self.assertTrue(self.store.read()['paused'])
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+
+    def test_readiness_requires_all_pinned_package_entries_and_hashes(self):
+        package, pins = self.package_fixture()
+        with patch.object(installer, 'CODEX_FILES', pins):
+            installer.update_coordinator(package)
+        with patch.object(executor, 'INSTALL', self.install), patch.object(executor, 'CODEX_FILES', pins), \
+                patch.object(executor, 'protected'):
+            executor.verify_codex_bundle()
+            (self.install / 'bin/codex-code-mode-host').write_text('changed')
+            with self.assertRaisesRegex(ValueError, 'missing or changed'):
+                executor.verify_codex_bundle()
 
     def test_changed_installed_file_refused_before_writes(self):
         (self.install / self.files[0]).write_text('unexpected edit\n')
@@ -1086,6 +1238,119 @@ class SnapshotTests(unittest.TestCase):
             executor.snapshot(self.source, self.target)
 
 
+class WorkerEventTests(unittest.TestCase):
+    EVENTS = [{'type': 'thread.started', 'thread_id': 'fixture'}, {'type': 'turn.started'},
+              {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'Done'}},
+              {'type': 'turn.completed', 'usage': {}}]
+
+    def test_strict_events_reject_errors_even_with_turn_completed(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'worker.jsonl'
+            valid = '\n'.join(map(json.dumps, self.EVENTS)) + '\n'
+            path.write_text(valid)
+            executor.validate_worker_events(path)
+            bad = ['', '{}\n', 'diagnostic, not JSON\n', '[]\n', '{"type":"item.completed","item":null}\n',
+                   '\n'.join(map(json.dumps, self.EVENTS[:-1])),
+                   valid + json.dumps({'type': 'error', 'message': 'failure'}),
+                   valid + json.dumps({'type': 'turn.failed'}),
+                   json.dumps({'type': 'item.completed', 'item': {'type': 'error', 'message': 'missing host'}}) + '\n' + valid]
+            for content in bad:
+                with self.subTest(content=content):
+                    path.write_text(content)
+                    with self.assertRaises(executor.WorkerExecutionError):
+                        executor.validate_worker_events(path)
+
+    def test_service_separates_diagnostics_and_rejects_zero_exit_tool_error(self):
+        with tempfile.TemporaryDirectory() as root:
+            log = Path(root) / 'worker.jsonl'
+            events = list(self.EVENTS)
+            def command(argv, **kwargs):
+                if argv[0] == 'systemd-run':
+                    kwargs['stdout'].write('\n'.join(map(json.dumps, events)) + '\n')
+                    kwargs['stderr'].write('ordinary diagnostic, not JSON\n')
+                return SimpleNamespace(returncode=0)
+            with patch.object(executor.subprocess, 'run', side_effect=command):
+                executor.service('worker', ['codex', 'exec', '--json'], output_file=log, json_events=True)
+                executor.validate_worker_events(log)
+                errors = Path(str(log) + '.stderr.log')
+                self.assertIn('ordinary diagnostic', errors.read_text())
+                self.assertNotIn('ordinary diagnostic', log.read_text())
+                self.assertEqual(errors.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+                events.insert(0, {'type': 'item.completed', 'item': {'type': 'error', 'message': 'missing host'}})
+                with self.assertRaisesRegex(executor.WorkerExecutionError, 'execution error'):
+                    executor.service('worker', ['codex', 'exec', '--json'], output_file=Path(root) / 'bad.jsonl', json_events=True)
+
+    def test_stderr_evidence_is_never_overwritten_and_invalid_usage_does_not_run(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(executor.subprocess, 'run') as run:
+            log = Path(root) / 'worker.jsonl'
+            errors = Path(str(log) + '.stderr.log')
+            errors.write_text('retained')
+            with self.assertRaises(FileExistsError):
+                executor.service('worker', ['codex', '--json'], output_file=log, json_events=True)
+            self.assertEqual(errors.read_text(), 'retained')
+            self.assertFalse(any(call.args[0][0] == 'systemd-run' for call in run.call_args_list))
+            run.reset_mock()
+            with self.assertRaisesRegex(ValueError, 'private output file'):
+                executor.service('worker', ['codex', '--json'], json_events=True)
+            run.assert_not_called()
+
+
+class RetryTaskTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = bg.Store(self.temp.name)
+        self.policy = bg.load_policy()
+        self.task = self.policy['tasks'][0]['id']
+        self.run_id = 'a' * 32
+        self.state = self.store.read()
+        self.state['tasks'][self.task] = {'status': 'needs-decision', 'base': 'b' * 40}
+        self.trial = {'mode': 'test-once', 'run_id': self.run_id, 'task': self.task,
+                      'outcome': 'needs-decision', 'pr': None, 'status': 'completed'}
+        self.path = self.store.directory / 'trials' / self.run_id / 'result.json'
+        self.path.parent.mkdir(parents=True)
+        bg.atomic_json(self.path, self.trial)
+        for mocked in (patch.object(admin, 'STATE', self.store.directory), patch.object(admin, 'protected')):
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
+    def test_explicit_retry_preserves_evidence_base_and_pause(self):
+        original = self.path.read_bytes()
+        admin.retry_task(self.store, self.state, self.policy, self.task, self.run_id)
+        entry = self.store.read()['tasks'][self.task]
+        self.assertEqual(entry['status'], 'working')
+        self.assertEqual(entry['base'], 'b' * 40)
+        self.assertEqual(entry['retry_history'], [{'run_id': self.run_id, 'previous_status': 'needs-decision'}])
+        self.assertTrue(self.store.read()['paused'])
+        self.assertEqual(self.path.read_bytes(), original)
+        entry['status'] = 'needs-decision'
+        self.state['tasks'][self.task] = entry
+        with self.assertRaisesRegex(ValueError, 'already retried'):
+            admin.retry_task(self.store, self.state, self.policy, self.task, self.run_id)
+
+    def test_retry_refuses_active_running_published_wrong_task_and_live_work(self):
+        original = copy.deepcopy(self.state)
+        for variant in ('running', 'active', 'published', 'receipt', 'wrong-task', 'live', 'complete'):
+            state = copy.deepcopy(original)
+            policy = copy.deepcopy(self.policy)
+            task_id = self.task
+            if variant == 'running': state['paused'] = False
+            if variant == 'active': state['active'] = {'id': self.run_id}
+            if variant == 'published': state['tasks'][self.task]['pr'] = 12
+            if variant == 'receipt': state['tasks'][self.task]['receipt'] = {'eligible': True}
+            if variant == 'wrong-task': task_id = 'unknown-task'
+            if variant == 'live': policy['tasks'][0]['profiles'] = ['compact']
+            if variant == 'complete': state['tasks'][self.task]['status'] = 'complete'
+            with self.subTest(variant=variant), self.assertRaises(ValueError):
+                admin.retry_task(self.store, state, policy, task_id, self.run_id)
+        self.trial['task'] = 'other-task'
+        bg.atomic_json(self.path, self.trial)
+        with self.assertRaisesRegex(ValueError, 'exact unpublished'):
+            admin.retry_task(self.store, self.state, self.policy, self.task, self.run_id)
+        self.assertFalse(self.store.path.exists())
+
+
 class ServiceBoundaryTests(unittest.TestCase):
     def test_failure_evidence_is_private_and_never_overwritten(self):
         with tempfile.TemporaryDirectory() as root, patch.object(executor.subprocess, 'run') as run:
@@ -1248,6 +1513,21 @@ class CoordinatorIntegrationTests(unittest.TestCase):
         self.assertEqual(entry['head'], first_head)
         self.assertEqual(entry['branch'], first_branch)
         self.assertFalse(any(event[0] == 'worker' for event in self.events))
+
+    def test_reported_tool_error_stops_before_snapshot_checks_review_or_publication(self):
+        def blocked(role, argv, **kwargs):
+            path = kwargs['output_file']
+            events = [{'type': 'item.completed', 'item': {'type': 'error', 'message': 'missing code-mode host'}},
+                      *WorkerEventTests.EVENTS]
+            path.write_text('\n'.join(map(json.dumps, events)))
+            executor.validate_worker_events(path)
+        with patch.object(executor, 'service', side_effect=blocked):
+            with self.assertRaises(executor.WorkerExecutionError):
+                executor.develop(self.store, self.state, self.policy, self.operator,
+                                 self.policy['tasks'][0], 'd' * 32, 'unused')
+        self.assertFalse((self.install / 'candidates').exists())
+        self.assertEqual(self.events, [])
+        self.assertTrue((self.state_dir / 'runs' / ('d' * 32) / 'worker.jsonl').exists())
 
     def test_single_run_uses_real_development_checks_review_and_publication_pipeline(self):
         self.state['paused'] = False
