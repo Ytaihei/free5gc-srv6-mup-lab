@@ -14,7 +14,7 @@ import tempfile
 import uuid
 
 from background_development import ROOT, Store, atomic_json, digest, load_policy, safe_relative
-from background_executor import ACCOUNTS, HOMES, INSTALL, REVIEW_SCHEMA, STATE, protected
+from background_executor import ACCOUNTS, CODEX_FILES, HOMES, INSTALL, REVIEW_SCHEMA, STATE, protected
 
 UNITS = ('srv6-mup-background.service', 'srv6-mup-background.timer',
          'srv6-mup-background-watchdog.service', 'srv6-mup-background-watchdog.timer')
@@ -27,13 +27,30 @@ COORDINATOR_UPDATE_PATHS = {
 }
 
 
-def update_coordinator():
+def codex_package_payloads(directory):
+    """Copy only reviewed bytes, not arbitrary executables from a package tree."""
+    directory = Path(directory).resolve(strict=True)
+    payloads = {}
+    for name, expected in CODEX_FILES.items():
+        path = directory / name
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or path.resolve() != path):
+            raise ValueError('Codex package entries must be plain files without links')
+        payload = path.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != expected:
+            raise ValueError('Codex package differs from the reviewed 0.154.0 Linux x86-64 bytes')
+        payloads[name] = payload
+    return payloads
+
+
+def update_coordinator(codex_package=None):
     """Explicit, narrow repair of a stopped installation; preserve auth and data."""
     protected(INSTALL / 'installation.json')
     protected(INSTALL / 'operator.json')
     manifest = json.loads((INSTALL / 'installation.json').read_text())
     inventory = json.loads((ROOT / 'config/public-source.json').read_text())['files']
-    if set(inventory) | {'bin/codex', 'review-schema.json'} != set(manifest['files']):
+    legacy = set(inventory) | {'bin/codex', 'review-schema.json'}
+    if set(manifest['files']) not in (legacy, legacy | set(CODEX_FILES)):
         raise ValueError('coordinator repair cannot add/remove inventory or tools')
     for name, expected in manifest['files'].items():
         safe_relative(name)
@@ -51,6 +68,25 @@ def update_coordinator():
             if name not in COORDINATOR_UPDATE_PATHS:
                 raise ValueError('coordinator repair cannot change policy, dependencies, units or lab code')
             changes[name] = payload
+    additions = {}
+    if codex_package is not None:
+        payloads = codex_package_payloads(codex_package)
+        if manifest['files']['bin/codex'] != CODEX_FILES['bin/codex']:
+            raise ValueError('package repair cannot replace the installed Codex executable')
+        for name, payload in payloads.items():
+            if name in manifest['files']:
+                if manifest['files'][name] != CODEX_FILES[name]:
+                    raise ValueError('package repair cannot replace installed tool bytes')
+                continue
+            target = INSTALL / name
+            if target.exists() or target.is_symlink():
+                raise ValueError('untracked package entry retained; inspect partial repair')
+            for parent_path in target.parents:
+                if parent_path.exists() or parent_path.is_symlink():
+                    protected(parent_path)
+                if parent_path == INSTALL:
+                    break
+            additions[name] = payload
     for name in (*UNITS, 'srv6-mup-background-test.service'):
         active = subprocess.check_output(
             ['systemctl', 'show', name, '--property=ActiveState', '--value'], text=True).strip()
@@ -66,7 +102,7 @@ def update_coordinator():
         state = store.read()
         if state.get('active'):
             raise ValueError('recover interrupted work before coordinator repair')
-        if not changes:
+        if not changes and not additions:
             print('Coordinator source already matches; no files or state changed.')
             return
         parent = STATE / 'updates'
@@ -76,6 +112,7 @@ def update_coordinator():
         atomic_json(backup / 'installation.json', manifest)
         operator = json.loads((INSTALL / 'operator.json').read_text())
         atomic_json(backup / 'operator.json', operator)
+        atomic_json(backup / 'added-files.json', {name: CODEX_FILES[name] for name in additions})
         for name in changes:
             target = backup / name
             target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -100,6 +137,22 @@ def update_coordinator():
                 if os.path.exists(temporary):
                     os.unlink(temporary)
             manifest['files'][name] = hashlib.sha256(payload).hexdigest()
+        for name, payload in additions.items():
+            target = INSTALL / name
+            directory = INSTALL
+            for part in Path(name).parts[:-1]:
+                directory /= part
+                if not directory.exists():
+                    directory.mkdir(mode=0o755)
+                    directory.chmod(0o755)
+                protected(directory)
+            descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+                os.fchmod(stream.fileno(), 0o644 if name == 'codex-package.json' else 0o755)
+            manifest['files'][name] = CODEX_FILES[name]
         # A partial write keeps the old manifest and fails verification on resume.
         atomic_json(INSTALL / 'installation.json', manifest)
         print('Coordinator repaired. Authentication/state/evidence retained; recommission before resume.')
@@ -142,6 +195,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--codex', type=Path, help='existing, trusted standalone Codex executable')
+    parser.add_argument('--codex-package', type=Path,
+                        help='explicitly restore missing companions from the pinned package during coordinator repair')
     parser.add_argument('--go-root', type=Path, help='existing pinned Go installation directory')
     parser.add_argument('--adopt-existing-units', action='store_true',
                         help='reuse exact protected templates after disabling their timers; never overwrite custom units')
@@ -157,8 +212,10 @@ def main():
             return
         if os.geteuid() != 0:
             raise ValueError('--apply requires sudo; no password is read by this script')
-        update_coordinator()
+        update_coordinator(args.codex_package)
         return
+    if args.codex_package:
+        raise ValueError('--codex-package is only for --update-coordinator; fresh installation uses --codex')
     print('Install fixed coordinator under /opt/srv6-mup-background; private state under /var/lib.')
     print('Create isolated mup-bg-worker/checks/publisher accounts, without administrative groups.')
     print('Install git, curl, make, jq, gh, Python venv; create pinned Python environment.')
@@ -174,17 +231,20 @@ def main():
     if not args.codex or not args.go_root:
         raise ValueError('--codex and --go-root must name already trusted tool installations')
     codex = args.codex.resolve(strict=True)
+    if codex.name != 'codex' or codex.parent.name != 'bin':
+        raise ValueError('--codex must name bin/codex in the complete pinned standalone package')
+    package = codex_package_payloads(codex.parent.parent)
     go_root = args.go_root.resolve(strict=True)
     if not stat.S_ISREG(codex.stat().st_mode) or not (go_root / 'bin/go').is_file():
         raise ValueError('invalid tool installation')
     # Metadata checks do not install/update Codex or select a new model.
-    codex_version = subprocess.check_output([codex, '--version'], text=True).strip()
+    # Package bytes already prove this version; never execute an operator's
+    # mutable source path with root privileges just to obtain a version string.
+    codex_version = 'codex-cli 0.154.0'
     locked_go = __import__('yaml').safe_load((ROOT / 'config/versions.lock.yml').read_text())['toolchains']['go']['version']
     go_version = subprocess.check_output([go_root / 'bin/go', 'version'], text=True).strip()
     if go_version != f'go version go{locked_go} linux/amd64':
         raise ValueError('Go installation differs from the reviewed lock')
-    if codex_version != 'codex-cli 0.154.0':
-        raise ValueError('this coordinator requires a reviewed Codex CLI 0.154.0 executable')
     inventory = json.loads((ROOT / 'config/public-source.json').read_text())['files']
     for name in inventory:
         path = ROOT / name
@@ -220,8 +280,11 @@ def main():
                         '--home-dir', str(HOMES[role]), '--shell', '/usr/sbin/nologin', account], check=True)
         HOMES[role].chmod(0o700)
     (INSTALL / 'bin').mkdir(mode=0o755)
-    shutil.copyfile(codex, INSTALL / 'bin/codex')
-    (INSTALL / 'bin/codex').chmod(0o755)
+    for name, payload in package.items():
+        target = INSTALL / name
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        target.write_bytes(payload)
+        target.chmod(0o644 if name == 'codex-package.json' else 0o755)
     shutil.copytree(go_root, INSTALL / 'go', symlinks=True)
     (INSTALL / 'bin/go').symlink_to('../go/bin/go')
     subprocess.run(['python3', '-m', 'venv', str(INSTALL / 'venv')], check=True)
@@ -235,7 +298,7 @@ def main():
         'author_name': '', 'author_email': '', 'commissioned': False,
         'automatic_merge': False, 'lab_rehearsals': {'compact': False, 'reference': False}})
     files = {name: hashlib.sha256((INSTALL / name).read_bytes()).hexdigest() for name in inventory}
-    for name in ('bin/codex', 'review-schema.json'):
+    for name in (*CODEX_FILES, 'review-schema.json'):
         files[name] = hashlib.sha256((INSTALL / name).read_bytes()).hexdigest()
     atomic_json(INSTALL / 'installation.json', {'version': 1, 'files': files})
     for name in UNITS:

@@ -9,13 +9,14 @@ import pwd
 import shutil
 import subprocess
 import socket
+import stat
 import sys
 import tempfile
 import uuid
 
 from background_development import Store, atomic_json, digest, load_policy, safe_relative
 from background_executor import (ACCOUNTS, INSTALL, ROOT, STATE, protected, service,
-                                 watchdog, worker_work_parent, launch_test_once, run)
+                                 watchdog, worker_work_parent, launch_test_once, run, verify_codex_bundle)
 
 
 def directory_denied(path):
@@ -137,6 +138,55 @@ def workspace_probe():
             key for key, passed in checks.items() if not passed))
 
 
+def commissioning_tools(workspace, evidence, model):
+    """Exercise the actual configured model/tool path, not just --version/login."""
+    verify_codex_bundle()
+    challenge = uuid.uuid4().hex
+    probe = workspace / 'tool-probe.txt'
+    prompt = (
+        'Commissioning probe only. Use the execution tool to run /usr/bin/python3 -c '
+        + json.dumps("from pathlib import Path; Path('tool-probe.txt').write_text(" + repr(challenge) + ")")
+        + '. Do not use apply_patch, inspect credentials, access the network, change other files or run tests. '
+        'Then state whether the command succeeded. Do not pretend success if tools are unavailable.')
+    log = evidence / 'worker-tools.jsonl'
+    service('worker', [INSTALL / 'bin/codex', 'exec', '--ignore-user-config', '--ignore-rules',
+                      '--skip-git-repo-check', '--sandbox', 'workspace-write', '-c', 'approval_policy="never"',
+                      '--model', model, '--json', '-'], cwd=workspace, seconds=180,
+            input_text=prompt, output_file=log, json_events=True)
+    descriptor = os.open(probe, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != len(challenge)
+                or info.st_uid != pwd.getpwnam(ACCOUNTS['worker']).pw_uid or stream.read(128) != challenge.encode()):
+            raise ValueError('worker tool probe did not create the expected private artifact')
+
+
+def retry_task(store, state, policy, task_id, run_id):
+    """Explicitly requeue only a retained, unpublished needs-decision trial."""
+    if not state['paused'] or state.get('active'):
+        raise ValueError('pause the queue and recover active work before retrying a task')
+    if uuid.UUID(hex=run_id).hex != run_id:
+        raise ValueError('exact trial run ID required')
+    task = next((task for task in policy['tasks'] if task['id'] == task_id), None)
+    entry = state['tasks'].get(task_id, {})
+    if (not task or task['profiles'] or entry.get('status') != 'needs-decision'
+            or any(entry.get(key) for key in ('pr', 'receipt', 'candidate_id', 'head', 'branch'))):
+        raise ValueError('only an unpublished code-only needs-decision task can be retried')
+    path = STATE / 'trials' / run_id / 'result.json'
+    protected(path)
+    trial = json.loads(path.read_text())
+    if (trial.get('mode') != 'test-once' or trial.get('run_id') != run_id or trial.get('task') != task_id
+            or trial.get('outcome') != 'needs-decision' or trial.get('pr') is not None
+            or trial.get('status') not in {'completed', 'needs-decision', 'failed'}):
+        raise ValueError('trial does not attest the exact unpublished needs-decision task')
+    if any(item.get('run_id') == run_id for item in entry.get('retry_history', [])):
+        raise ValueError('this trial was already retried')
+    entry.setdefault('retry_history', []).append({'run_id': run_id, 'previous_status': entry['status']})
+    entry['status'] = 'working'  # Keep base, checkout, edits and every old evidence file.
+    store.save(state)
+    print('Task requeued; evidence retained, queue still paused. Resume explicitly.')
+
+
 def commission(store, state, author_name, author_email):
     for value in (author_name, author_email):
         if not value.strip() or '\n' in value:
@@ -156,6 +206,7 @@ def commission(store, state, author_name, author_email):
         ('publisher-auth', 'publisher', ['gh', 'auth', 'status'], 30),
         ('isolation-probe', 'checks', ['python3', INSTALL / 'scripts/background-admin.py', 'probe-isolation'], 30),
         ('worker-workspace', 'worker', ['python3', INSTALL / 'scripts/background-admin.py', 'probe-workspace'], 30),
+        ('worker-tools', 'worker', None, 180),
         ('source-checks', 'checks', ['make', 'check'], 900),
     )
     result = {'complete': False, 'phases': {}}
@@ -167,7 +218,7 @@ def commission(store, state, author_name, author_email):
         result['phases'][name] = 'running'
         atomic_json(evidence / 'result.json', result)
         print('Commissioning: ' + name, flush=True)
-        log = evidence / (name + '.log')
+        log = evidence / (name + ('.jsonl' if name == 'worker-tools' else '.log'))
         try:
             if name == 'worker-workspace':
                 cwd = commissioning_workspace(evidence.name)
@@ -175,7 +226,10 @@ def commission(store, state, author_name, author_email):
                 atomic_json(evidence / 'result.json', result)
             if name == 'source-checks':
                 commissioning_source(cwd)
-            service(role, command, cwd=cwd, seconds=seconds, output_file=log)
+            if name == 'worker-tools':
+                commissioning_tools(Path(result['worker_workspace']), evidence, operator['model'])
+            else:
+                service(role, command, cwd=cwd, seconds=seconds, output_file=log)
         except (ValueError, OSError, subprocess.SubprocessError) as error:
             if not log.exists():
                 atomic_json(log, {'error': str(error)})
@@ -205,6 +259,9 @@ def main():
     commission_parser.add_argument('--author-email', required=True)
     acknowledge = sub.add_parser('acknowledge')
     acknowledge.add_argument('--run', required=True, help='exact interrupted development run ID')
+    retry = sub.add_parser('retry-task', help='requeue an unpublished code-only needs-decision trial while paused')
+    retry.add_argument('--task', required=True)
+    retry.add_argument('--run', required=True)
     args = parser.parse_args()
     if args.action == 'probe-isolation':
         isolation_probe()
@@ -236,6 +293,9 @@ def main():
         return
     with store.locked():
         state = store.read()
+        if args.action == 'retry-task':
+            retry_task(store, state, load_policy(), args.task, args.run)
+            return
         if args.action == 'acknowledge':
             active = state.get('active')
             if not active or active.get('id') != args.run or active.get('kind') != 'development':

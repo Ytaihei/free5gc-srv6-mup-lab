@@ -44,7 +44,7 @@ Preview first, then supply their absolute paths:
 
 ```bash
 sudo python3 scripts/install-background-development.py --apply \
-  --codex /absolute/path/to/codex --go-root /absolute/path/to/pinned-go
+  --codex /absolute/path/to/package/bin/codex --go-root /absolute/path/to/pinned-go
 ```
 
 The installer creates three dedicated accounts, installs prerequisites and a
@@ -52,6 +52,15 @@ root-owned copy under `/opt/srv6-mup-background`, and private coordinator state
 under `/var/lib/srv6-mup-background`. Existing accounts, units, installation or
 state cause refusal, not replacement. A partial installation is retained; do not
 delete it blindly and rerun. Neither timer is enabled.
+
+Supply the complete standalone Codex 0.154.0 Linux x86-64 package, not an isolated
+copy of its main executable. The installer checks fixed SHA-256 hashes for
+`bin/codex`, `bin/codex-code-mode-host`, `codex-package.json`, `codex-path/rg`,
+`codex-resources/bwrap` and `codex-resources/zsh/bin/zsh`. These pins describe the
+reviewed trusted package bytes; they are not an upstream signature verification.
+All six files enter the private installation manifest and are checked before
+development. They are not added to this source-only repository. No automatic
+download, version upgrade, model switch or authentication copying is performed.
 
 If unit files were copied and a timer enabled **before installation**, a timer
 listing does not demonstrate a working developer. Its executable under `/opt`
@@ -79,7 +88,8 @@ worker has no publisher auth, sudo, Docker/libvirt socket or lab SSH key. Tests
 run under a third account with neither credential set. Model usage consumes the
 authenticated Codex account's allowance; no API-billing fallback is configured.
 
-Commissioning checks account isolation, authentication and source checks. Supply
+Commissioning checks account isolation, authentication, actual model/tool execution
+and source checks. Supply
 your intended public commit identity:
 
 ```bash
@@ -98,7 +108,7 @@ acceptance; a model cannot write this file.
 ### Commissioning failures and coordinator repair
 
 Commissioning records separate `worker-auth`, `publisher-auth`, `isolation-probe`,
-`worker-workspace` and `source-checks` phases. Each attempt retains a private directory under
+`worker-workspace`, `worker-tools` and `source-checks` phases. Each attempt retains a private directory under
 `/var/lib/srv6-mup-background/commissioning/`, with a `result.json` and 0600 logs.
 An error names the failed phase and exact log path. Inspect logs locally; do not
 publish authentication output. Recommissioning pauses the queue and invalidates
@@ -108,6 +118,14 @@ The `worker-workspace` phase checks directory traversal and scratch-file I/O as
 the actual isolated worker, without invoking a model, deploying or publishing.
 It uses a new retained worker-owned directory under the same work parent as
 development checkouts; its path is recorded in `result.json`.
+
+The `worker-tools` phase verifies the package and invokes the configured Codex
+model inside the same worker isolation, in that new scratch directory, for at
+most 180 seconds. It requires a private file containing a fresh challenge, not
+just a successful process exit or the model's assertion of success. This uses
+the authenticated account's model allowance but does not inspect a development
+checkout, deploy, publish or merge. A missing helper, malformed/error event stream,
+or absent/wrong artifact prevents commissioning and leaves the queue paused.
 
 A worker failure with `200/CHDIR` can occur if that root-owned work parent was
 created as `0700` by the coordinator's `UMask=0077`, despite requesting `0755`
@@ -160,11 +178,53 @@ sudo python3 scripts/install-background-development.py --apply --update-coordina
 This narrow updater verifies all installed manifest hashes, accepts only the
 coordinator administrator/executor/installer, their tests, paired guide and
 translation hashes, and refuses source inventory changes. It cannot update the
-policy, units, dependencies, tools or lab code. It retains old files and manifests
+policy, units, dependencies, tool versions or lab code. It retains old files and manifests
 under the private `updates/` directory, preserves accounts, credentials and task
 evidence, then leaves the queue paused and commissioning/automatic merging off.
 Run `commission` again before resuming. A partial update retains its backup and
 fails closed; do not delete installation/state or edit the manifest to bypass it.
+
+For a legacy installation containing only `bin/codex`, explicitly restore the
+missing pinned companions while applying the coordinator repair:
+
+```bash
+sudo python3 scripts/install-background-development.py --apply --update-coordinator \
+  --codex-package /absolute/path/to/package
+```
+
+The existing Codex executable must already match the pinned package. The updater
+can add only missing, hash-matched companion files, not replace a different tool
+or adopt untracked files from a partial repair. It records additions with the
+backup and writes the new installation manifest last. Timers/services must be
+stopped as above. Recommission before resuming; `--update-coordinator` without
+the package option does not silently install missing tools.
+
+Worker and review stdout are retained as `worker.jsonl` and `review.jsonl`, with
+diagnostics separately in `worker.jsonl.stderr.log` and `review.jsonl.stderr.log`.
+All are private 0600 evidence. The coordinator rejects malformed/incomplete JSONL,
+top-level errors, failed turns and error items even if the process exits zero or
+later emits `turn.completed`. Such worker execution errors fail the trial and
+immediately pause the queue; do not treat an error-free conversation ending as
+proof that a task was accomplished. Older mixed logs remain untouched and must
+not be fed directly to a JSONL parser. See the
+[official output/event documentation](https://learn.chatgpt.com/docs/non-interactive-mode).
+
+After repairing a legacy no-change trial, an operator may explicitly retry that
+exact unpublished code-only task while the queue is paused:
+
+```bash
+sudo /opt/srv6-mup-background/venv/bin/python3 \
+  /opt/srv6-mup-background/scripts/background-admin.py retry-task \
+  --task documentation-maintenance --run EXACT_RUN_ID
+```
+
+This requires matching retained trial evidence with outcome `needs-decision` and
+no PR or publication receipt. It preserves the checkout, base, edits and original
+logs/results, records the retry and prioritizes that retained work; it does not
+reset failure counts or resume the queue. It refuses active work, live tasks,
+published candidates, mismatched evidence and repeat use of the same trial ID.
+After successful commissioning and this explicit retry, use `resume` and
+`test-once`; inspect the new evidence before accepting the development cycle.
 
 ## Run, pause and observe
 
@@ -264,7 +324,8 @@ task outcome, PR number when present, and final notification delivery. A
 `completed` result means the selected pipeline returned and its final status
 issue update succeeded; it does **not** attest asynchronous GitHub CI, a merge or
 live-lab validation. A retained publication can be resumed without rerunning the
-worker, and a no-change task ends as `needs-decision` without a PR. Those outcomes
+worker, and a no-change task and its trial both end as `needs-decision`, not
+`completed`, without a PR. Older results are not retroactively rewritten. Those outcomes
 are not evidence of a fresh end-to-end candidate/check/review/PR cycle. Inspect
 the retained run evidence and exact PR checks before accepting that cycle.
 
