@@ -190,6 +190,153 @@ class SafeDiagnosticTests(unittest.TestCase):
                 admin.main()
 
 
+class OperatorLogTests(unittest.TestCase):
+    def setUp(self):
+        SafeDiagnosticTests.setUp(self)
+        self.gid = os.getgid()
+        self.group = SimpleNamespace(gr_gid=self.gid, gr_mem=[])
+        self.parent = self.install / 'candidates/operator-logs'
+        self.parent.mkdir(mode=0o750)
+        self.parent.chmod(0o750)
+        for mocked in (patch.object(executor.grp, 'getgrnam', return_value=self.group),
+                       patch.object(executor.os, 'fchown'),
+                       patch.object(admin, 'INSTALL', self.install)):
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
+    def record(self, phase='worker-tools'):
+        return executor.diagnostic_record('commissioning', phase, 'failed', 'sandbox-denied')
+
+    def test_detailed_signals_and_no_raw_text_or_model_response(self):
+        with self.assertRaises(ValueError):
+            executor.write_operator_event(dict(self.record(), secret='PRIVATE_SECRET'))
+        self.assertEqual(list(self.parent.iterdir()), [])
+        text = 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\nPRIVATE_SECRET /home/person 192.0.2.1'
+        executor.write_operator_event(self.record(), text)
+        result = executor.read_operator_logs()
+        self.assertEqual(result['status'], 'available')
+        self.assertEqual(result['events'][0]['signals'],
+                         ['bwrap', 'loopback', 'netlink-address', 'operation-not-permitted'])
+        self.assertNotIn('PRIVATE_SECRET', json.dumps(result))
+        self.assertNotIn('/home/person', json.dumps(result))
+        self.assertNotIn('192.0.2.1', json.dumps(result))
+
+    def test_authentication_evidence_is_never_read_or_projected(self):
+        bg.atomic_json(self.state / 'auth.log', {'message': 'PRIVATE_SECRET bwrap permission denied'})
+        for phase in executor.AUTH_PHASES:
+            with patch.object(executor, 'private_diagnostic_text', side_effect=AssertionError('auth read')):
+                executor.emit_diagnostic('commissioning', phase, 'failed', error=ValueError('private'),
+                                         logs=(self.state / 'auth.log',))
+            self.assertEqual(executor.operator_event(self.record(phase), 'bwrap permission denied')['signals'], [])
+        self.assertTrue(all(e['evidence'] == 'excluded-auth' for e in executor.read_operator_logs()['events']))
+
+    def test_atomic_group_only_permissions_under_private_umask(self):
+        previous = os.umask(0o077)
+        try:
+            executor.write_operator_event(self.record(), 'permission denied')
+        finally:
+            os.umask(previous)
+        files = list(self.parent.iterdir())
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].stat().st_mode & 0o777, 0o640)
+        executor.os.fchown.assert_called_with(unittest.mock.ANY, 0, self.gid)
+        self.assertEqual(self.state.stat().st_mode & 0o777, 0o700)
+
+    def test_reader_rejects_permissions_schema_links_and_oversized_files(self):
+        executor.write_operator_event(self.record())
+        path = next(self.parent.iterdir())
+        original = path.read_text()
+        for mode in (0o644, 0o660, 0o666):
+            path.chmod(mode)
+            self.assertEqual(executor.read_operator_logs()['status'], 'unavailable')
+        path.chmod(0o640)
+        for value in [dict(json.loads(original), secret='PRIVATE_SECRET'),
+                      dict(json.loads(original), signals=['PRIVATE_SECRET']), ['PRIVATE_SECRET']]:
+            path.write_text(json.dumps(value))
+            self.assertEqual(executor.read_operator_logs()['events'], [])
+        path.write_text('x' * 16385)
+        self.assertEqual(executor.read_operator_logs()['status'], 'unavailable')
+        path.unlink()
+        target = self.state / 'private'
+        target.write_text('PRIVATE_SECRET')
+        path.symlink_to(target)
+        self.assertEqual(executor.read_operator_logs()['status'], 'unavailable')
+        self.assertEqual(target.read_text(), 'PRIVATE_SECRET')
+
+    def test_reader_is_bounded_read_only_and_handles_no_access(self):
+        for i in range(3):
+            executor.write_operator_event(self.record(), 'bwrap')
+        with patch.object(bg.Store, 'read', side_effect=AssertionError('private read')), \
+                patch.object(executor.subprocess, 'run', side_effect=AssertionError('execution')):
+            self.assertEqual(len(executor.read_operator_logs(2)['events']), 2)
+            with patch.object(executor, 'protected', side_effect=PermissionError('PRIVATE_SECRET')):
+                self.assertNotIn('PRIVATE_SECRET', json.dumps(executor.read_operator_logs()))
+        for limit in (0, 201, True):
+            with self.assertRaises(ValueError):
+                executor.read_operator_logs(limit)
+
+    def test_export_is_optional_and_cannot_mask_main_failure(self):
+        self.parent.rmdir()
+        executor.write_operator_event(self.record(), 'bwrap')
+        self.assertFalse(self.parent.exists())
+        with patch.object(executor, 'write_operator_event', side_effect=ValueError('PRIVATE_SECRET')), \
+                contextlib.redirect_stderr(io.StringIO()) as out:
+            executor.emit_diagnostic('commissioning', 'worker-tools', 'failed', 'sandbox-denied')
+        self.assertNotIn('PRIVATE_SECRET', out.getvalue())
+        self.assertEqual(executor.read_diagnostics()['commissioning']['status'], 'failed')
+
+    def test_enrollment_creates_dedicated_group_and_is_idempotent(self):
+        self.parent.rmdir()
+        user = SimpleNamespace(pw_uid=1000, pw_gid=9999)
+        with patch.object(admin.pwd, 'getpwnam', return_value=user), \
+                patch.object(admin.grp, 'getgrnam', side_effect=[KeyError(), self.group, self.group]), \
+                patch.object(admin.os, 'chown'), patch.object(admin.subprocess, 'run') as run:
+            admin.grant_log_access('reader')
+        self.assertEqual([c.args[0] for c in run.call_args_list], [
+            ['/usr/sbin/groupadd', '--system', executor.LOG_GROUP],
+            ['/usr/sbin/usermod', '--append', '--groups', executor.LOG_GROUP, 'reader']])
+        self.assertEqual(self.parent.stat().st_mode & 0o777, 0o750)
+        self.assertEqual((self.state / 'log-access.json').stat().st_mode & 0o777, 0o600)
+        self.group.gr_mem = ['reader']
+        with patch.object(admin.pwd, 'getpwnam', return_value=user), patch.object(admin.subprocess, 'run') as run:
+            admin.grant_log_access('reader')
+        run.assert_not_called()
+
+    def test_enrollment_refuses_unmanaged_group_root_and_service_accounts(self):
+        with patch.object(admin.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1000, pw_gid=9999)), \
+                patch.object(admin.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'unmanaged'):
+                admin.grant_log_access('reader')
+            for username in ['root', 'mup-bg-worker', '--root', '../reader']:
+                with patch.object(admin.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=0)):
+                    with self.assertRaises(ValueError):
+                        admin.grant_log_access(username)
+        run.assert_not_called()
+
+    def test_retained_export_populates_history_without_touching_raw_evidence(self):
+        directory = self.state / 'commissioning' / ('b' * 32)
+        directory.mkdir(parents=True)
+        bg.atomic_json(directory / 'result.json', {'complete': False, 'phases': {'worker-tools': 'failed'}})
+        bg.atomic_json(directory / 'worker-tools.jsonl', {'message': 'bwrap: mount: Permission denied PRIVATE_SECRET'})
+        before = {p.name: p.read_bytes() for p in directory.iterdir()}
+        admin.export_commissioning_diagnostic('b' * 32)
+        event = executor.read_operator_logs()['events'][0]
+        self.assertEqual(event['record']['source'], 'retained')
+        self.assertEqual(event['signals'], ['bwrap', 'mount', 'permission-denied'])
+        self.assertEqual(before, {p.name: p.read_bytes() for p in directory.iterdir()})
+
+    def test_logs_cli_needs_neither_root_nor_external_tools(self):
+        with patch.object(sys, 'argv', ['background-admin.py', 'logs', '--limit', '3']), \
+                patch.object(admin, 'read_operator_logs', return_value={'events': []}) as read, \
+                patch.object(bg.Store, 'read', side_effect=AssertionError('private read')), \
+                contextlib.redirect_stdout(io.StringIO()):
+            admin.main()
+        read.assert_called_once_with(3)
+        with patch.object(sys, 'argv', ['background-admin.py', 'grant-log-access', '--user', 'reader']):
+            with self.assertRaisesRegex(ValueError, 'root-owned installed'):
+                admin.main()
+
+
 class SingleRunTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

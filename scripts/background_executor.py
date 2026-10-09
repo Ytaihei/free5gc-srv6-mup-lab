@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 import hashlib
+import grp
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,38 @@ HOMES = {role: Path('/var/lib') / account for role, account in ACCOUNTS.items()}
 PRIVATE_NETS = '127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 ::1/128 fc00::/7 fe80::/10'
 WORK_DEADLINE = None
 TEST_UNIT = 'srv6-mup-background-test.service'
+LOG_GROUP = 'mup-bg-log-readers'
+AUTH_PHASES = {'worker-auth', 'publisher-auth', 'authentication'}
+# These are projection labels, never captured substrings. Even unknown secrets
+# and generated text cannot become free-form output in an operator log.
+LOG_SIGNALS = {
+    'bwrap': ('bwrap', 'bubblewrap'),
+    'code-mode-host': ('codex-code-mode-host',),
+    'user-namespace': ('user namespace', 'userns', 'uid_map', 'gid_map'),
+    'namespace-creation': ('creating new namespace', 'create namespace', 'unshare',),
+    'mount': ('mount', 'pivot_root'),
+    'mount-propagation': ('make / slave', 'mount propagation'),
+    'proc-filesystem': ('/proc', 'procfs'),
+    'device-filesystem': ('/dev/', 'mknod'),
+    'loopback': ('loopback',),
+    'netlink-address': ('rtm_newaddr',),
+    'netlink-link': ('rtm_newlink',),
+    'netlink-socket': ('af_netlink', 'netlink socket'),
+    'unsupported-address-family': ('address family not supported',),
+    'network-namespace': ('network namespace', 'netns'),
+    'capability': ('setpcap', 'capset', 'capabilities'),
+    'seccomp': ('seccomp', 'bad system call'),
+    'apparmor': ('apparmor',),
+    'landlock': ('landlock',),
+    'operation-not-permitted': ('operation not permitted',),
+    'permission-denied': ('permission denied',),
+    'read-only-filesystem': ('read-only file system',),
+    'missing-file': ('no such file or directory', 'executable was not found'),
+    'timeout': ('timed out', 'timeoutexpired'),
+    'disk-full': ('no space left on device',),
+    'test-failure': ('assertionerror', 'failed (failures=', '--- fail:',),
+    'tool-error-event': ('"type": "error"', '"type":"error"', '"type":"turn.failed"', '"type": "turn.failed"'),
+}
 DIAGNOSTIC_PHASES = {'preflight', 'worker-auth', 'publisher-auth', 'isolation-probe',
                      'worker-workspace', 'worker-tools', 'source-checks', 'authentication',
                      'review-refresh', 'development-checks-review-publication', 'notification',
@@ -142,10 +175,12 @@ def emit_diagnostic(scope, phase, status, code=None, *, error=None, logs=()):
     if ROOT != INSTALL or os.geteuid() != 0:
         return  # Offline tests/checkouts never touch the installed status.
     try:
+        logs = () if phase in AUTH_PHASES else logs
         evidence = ''.join(private_diagnostic_text(path) for path in logs if path.exists())
         code = code or diagnostic_hint(phase, error, evidence)
         write_diagnostic(scope, phase, status, code)
-    except (OSError, ValueError):
+        write_operator_event(diagnostic_record(scope, phase, status, code), evidence)
+    except (OSError, ValueError, KeyError):
         # Status export cannot mask a primary failure or grant permission to run.
         print('Safe diagnostic export unavailable; private evidence retained.', file=sys.stderr)
 
@@ -170,6 +205,92 @@ def read_diagnostics():
             result[scope] = dict(clean, stale_or_clock_skew=age < 0 or age > 86400)
         except (OSError, ValueError, KeyError, TypeError):
             result[scope] = {'status': 'unavailable', 'next_action': 'operator-export-diagnostics'}
+    return result
+
+
+def operator_log_directory():
+    """Validate a pre-provisioned group-only directory; never grant access here."""
+    parent = INSTALL / 'candidates' / 'operator-logs'
+    protected(parent)
+    info = parent.stat()
+    group = grp.getgrnam(LOG_GROUP)
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o750
+            or info.st_gid != group.gr_gid or group.gr_gid == 0):
+        raise ValueError('invalid operator log directory')
+    return parent, group.gr_gid
+
+
+def operator_event(record, evidence):
+    clean = diagnostic_record(record['scope'], record['phase'], record['status'], record['classification_hint'],
+                              source=record['source'], observed_at=record['observed_at'])
+    if record != clean:
+        raise ValueError('invalid operator diagnostic record')
+    # Authentication output is excluded even if a caller accidentally passes it.
+    text = '' if record['phase'] in AUTH_PHASES else evidence.lower()
+    return {'record': clean, 'signals': sorted(name for name, patterns in LOG_SIGNALS.items()
+                                               if any(pattern in text for pattern in patterns)),
+            'evidence': 'excluded-auth' if record['phase'] in AUTH_PHASES else
+                        ('bounded' if evidence else 'none')}
+
+
+def write_operator_event(record, evidence=''):
+    if ROOT != INSTALL or os.geteuid() != 0:
+        return
+    parent = INSTALL / 'candidates' / 'operator-logs'
+    if not parent.exists() and not parent.is_symlink():
+        return  # Explicit opt-in; no implicit group creation or permission changes.
+    parent, gid = operator_log_directory()
+    data = operator_event(record, evidence)
+    destination = parent / (f'{time.time_ns():020d}-' + uuid.uuid4().hex + '.json')
+    fd, temporary = tempfile.mkstemp(prefix='.operator-', dir=parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(data, stream, sort_keys=True)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchown(stream.fileno(), 0, gid)
+            os.fchmod(stream.fileno(), 0o640)
+        os.replace(temporary, destination)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def read_operator_logs(limit=20):
+    """Unprivileged read of fixed-schema copies only. No private-state access."""
+    if type(limit) is not int or not 1 <= limit <= 200:
+        raise ValueError('log limit must be between 1 and 200')
+    result = {'notice': 'sanitized-history-not-live-state; signals-are-untrusted-hints', 'events': []}
+    try:
+        parent, gid = operator_log_directory()
+        import heapq
+        paths = heapq.nlargest(limit, (p for p in parent.iterdir()
+                                     if re.fullmatch(r'[0-9]{20}-[0-9a-f]{32}\.json', p.name)))
+        for path in paths:
+            protected(path)
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'r') as stream:
+                info = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 16384
+                        or info.st_gid != gid or stat.S_IMODE(info.st_mode) != 0o640):
+                    raise ValueError('invalid operator log file')
+                event = json.load(stream)
+            rec = event['record']
+            clean = diagnostic_record(rec['scope'], rec['phase'], rec['status'], rec['classification_hint'],
+                                      source=rec['source'], observed_at=rec['observed_at'])
+            signals = event['signals']
+            if (rec != clean or set(event) != {'record', 'signals', 'evidence'}
+                    or not isinstance(signals, list) or len(signals) > len(LOG_SIGNALS)
+                    or any(not isinstance(s, str) or s not in LOG_SIGNALS for s in signals)
+                    or signals != sorted(set(signals))
+                    or event['evidence'] not in ('excluded-auth', 'bounded', 'none')
+                    or (rec['phase'] in AUTH_PHASES and (signals or event['evidence'] != 'excluded-auth'))):
+                raise ValueError('invalid operator log schema')
+            result['events'].append(event)
+        result['status'] = 'available'
+    except (OSError, ValueError, KeyError, TypeError):
+        result.update(status='unavailable', events=[], next_action='check-log-access-or-login-session')
     return result
 # Reviewed standalone Linux x86-64 package, 0.154.0. Sources are supplied by
 # the operator; no downloads, version selection or authentication copying.
@@ -800,7 +921,8 @@ def run(store, policy, *, test_once=False):
             emit_diagnostic('development', result.get('phase', 'preflight'), result['status'],
                             'run-blocked' if result['status'] == 'blocked' else None, error=error,
                             logs=tuple(STATE / 'runs' / run_id / name for name in (
-                                'worker.jsonl', 'worker.jsonl.stderr.log', 'review.jsonl', 'review.jsonl.stderr.log')))
+                                'worker.jsonl', 'worker.jsonl.stderr.log', 'review.jsonl', 'review.jsonl.stderr.log',
+                                'source-check.log', 'check-0.log', 'check-1.log', 'check-2.log', 'check-3.log')))
             raise
         else:
             status = result['status']
