@@ -226,6 +226,60 @@ published candidates, mismatched evidence and repeat use of the same trial ID.
 After successful commissioning and this explicit retry, use `resume` and
 `test-once`; inspect the new evidence before accepting the development cycle.
 
+### Read diagnostics without sudo
+
+After installing this coordinator version, any local user can read the sanitized
+last-observed commissioning/development snapshots without sudo:
+
+```bash
+/opt/srv6-mup-background/venv/bin/python3 \
+  /opt/srv6-mup-background/scripts/background-admin.py diagnostics
+```
+
+The coordinator writes root-owned `0644` JSON files in the root-owned `0755`
+directory `/opt/srv6-mup-background/candidates/diagnostics/`:
+`commissioning.json` and `development.json`. These are readable by all local
+users, not published to the network or GitHub. Private state and raw logs retain
+their existing permissions. No sudoers or service permission changes are needed.
+
+The exact schema contains only version, scope, phase, status, classification
+hint, next-action category, source (`live` or `retained`) and observation time.
+There are no raw messages, model responses, task/run IDs, hostnames, IP addresses,
+credentials or work paths. Classifications and actions are fixed enums, not
+extracted text. For example, `tool-host-missing` suggests checking the pinned
+package, and `sandbox-denied` suggests inspecting isolation without disabling it.
+These are **hints, not confirmed causes**; `unknown-failure` may still require an
+operator to inspect private evidence.
+
+Commissioning phase changes and development execution emit snapshots
+automatically; the watchdog records detected interruptions. This is **not a live
+service/queue status endpoint**, and not every administrative preflight error is
+recorded. The reader adds `stale_or_clock_skew` for observations older than 24
+hours or in the future. `running` can remain after an abrupt stop, and an export
+failure leaves the previous snapshot intact. Always check the observation time.
+Missing, inaccessible or invalid-schema/ownership files return `unavailable`,
+never an inferred success. Reading runs no model, subprocess or private-state
+inspection and changes no gates.
+
+For a failure retained before this feature was installed, apply the reviewed
+coordinator repair above, then have an operator export that exact commissioning
+result **once**:
+
+```bash
+sudo /opt/srv6-mup-background/venv/bin/python3 \
+  /opt/srv6-mup-background/scripts/background-admin.py diagnostics-export \
+  --commissioning EXACT_RUN_ID
+```
+
+Use the lowercase 32-character ID from the private commissioning directory, not
+a path. This privileged command reads bounded private evidence and emits only
+the fixed schema, preserving the original result's modification time as the
+observation time. It neither reruns checks nor changes the queue, credentials,
+timers or raw evidence. Installation and this legacy export still need sudo;
+subsequent `diagnostics` reads do not. A successful export is not successful
+commissioning: do not resume a failed installation merely because its diagnostic
+snapshot is now readable.
+
 ## Run, pause and observe
 
 After commissioning, an operator may resume **code-only** development and enable

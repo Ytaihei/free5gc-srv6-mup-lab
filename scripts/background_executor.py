@@ -16,6 +16,8 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
+import tempfile
 import time
 import uuid
 from zoneinfo import ZoneInfo
@@ -31,6 +33,144 @@ HOMES = {role: Path('/var/lib') / account for role, account in ACCOUNTS.items()}
 PRIVATE_NETS = '127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 ::1/128 fc00::/7 fe80::/10'
 WORK_DEADLINE = None
 TEST_UNIT = 'srv6-mup-background-test.service'
+DIAGNOSTIC_PHASES = {'preflight', 'worker-auth', 'publisher-auth', 'isolation-probe',
+                     'worker-workspace', 'worker-tools', 'source-checks', 'authentication',
+                     'review-refresh', 'development-checks-review-publication', 'notification',
+                     'finished', 'watchdog'}
+DIAGNOSTIC_ACTIONS = {
+    'none': 'no-action', 'in-progress': 'wait-or-check-service',
+    'tool-host-missing': 'operator-check-pinned-package',
+    'sandbox-denied': 'operator-inspect-isolation-do-not-disable',
+    'tool-execution-error': 'operator-inspect-private-worker-evidence',
+    'invalid-worker-events': 'operator-inspect-private-worker-evidence',
+    'artifact-unverified': 'operator-inspect-tool-probe',
+    'authentication-check-failed': 'operator-check-account-login',
+    'isolation-check-failed': 'operator-inspect-isolation-do-not-disable',
+    'source-checks-failed': 'operator-inspect-private-check-evidence',
+    'timeout': 'operator-inspect-timeout', 'run-blocked': 'operator-check-queue-gates',
+    'needs-decision': 'operator-review-task', 'interrupted': 'operator-inspect-before-acknowledging',
+    'unknown-failure': 'operator-inspect-private-evidence',
+}
+
+
+def diagnostic_hint(phase, error=None, evidence=''):
+    """Heuristic only. Never return messages, matches, paths or generated prose."""
+    text = evidence.lower()
+    if 'codex-code-mode-host' in text and ('not found' in text or 'no such file' in text):
+        return 'tool-host-missing'
+    if any(word in text for word in ('bwrap', 'sandbox', 'namespace')) and any(
+            word in text for word in ('operation not permitted', 'permission denied', 'failed to create')):
+        return 'sandbox-denied'
+    if isinstance(error, subprocess.TimeoutExpired):
+        return 'timeout'
+    if isinstance(error, WorkerExecutionError):
+        return 'invalid-worker-events' if any(word in str(error) for word in ('malformed', 'incomplete')) else 'tool-execution-error'
+    if '"type":"error"' in text.replace(' ', '') or '"type":"turn.failed"' in text.replace(' ', ''):
+        return 'tool-execution-error'
+    if phase in {'worker-auth', 'publisher-auth', 'authentication'}:
+        return 'authentication-check-failed'
+    if phase == 'isolation-probe':
+        return 'isolation-check-failed'
+    if phase == 'source-checks':
+        return 'source-checks-failed'
+    if phase == 'worker-tools' and isinstance(error, (FileNotFoundError, ValueError)):
+        return 'artifact-unverified'
+    return 'unknown-failure'
+
+
+def private_diagnostic_text(path):
+    """Read bounded, coordinator-owned evidence without following file links."""
+    protected(path)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o077:
+            raise ValueError('unsafe private diagnostic evidence')
+        return stream.read(256 * 1024).decode('utf-8', errors='replace')
+
+
+def diagnostic_record(scope, phase, status, code, *, source='live', observed_at=None):
+    if (scope not in {'commissioning', 'development'} or phase not in DIAGNOSTIC_PHASES
+            or status not in {'running', 'passed', 'failed', 'blocked', 'needs-decision', 'interrupted'}
+            or code not in DIAGNOSTIC_ACTIONS or source not in {'live', 'retained'}):
+        raise ValueError('diagnostic values must be fixed enums')
+    observed_at = observed_at or datetime.now(ZoneInfo('UTC')).isoformat()
+    timestamp = datetime.fromisoformat(observed_at)
+    if timestamp.tzinfo is None:
+        raise ValueError('diagnostic timestamp requires timezone')
+    return {'version': 1, 'scope': scope, 'phase': phase, 'status': status,
+            'classification_hint': code, 'next_action': DIAGNOSTIC_ACTIONS[code],
+            'source': source, 'observed_at': timestamp.astimezone(ZoneInfo('UTC')).isoformat()}
+
+
+def write_diagnostic(scope, phase, status, code, **kwargs):
+    # Reuse the existing writable coordinator-only candidates root. No change
+    # to private state permissions, sudoers, systemd units, or network exposure.
+    if ROOT != INSTALL or os.geteuid() != 0:
+        raise ValueError('only the installed coordinator may export diagnostics')
+    record = diagnostic_record(scope, phase, status, code, **kwargs)
+    parent = INSTALL / 'candidates' / 'diagnostics'
+    protected(parent.parent)
+    try:
+        parent.mkdir(mode=0o755)
+    except FileExistsError:
+        pass
+    else:
+        parent.chmod(0o755)
+    protected(parent)
+    destination = parent / (scope + '.json')
+    if destination.exists() or destination.is_symlink():
+        protected(destination)
+        info = destination.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError('unsafe diagnostic destination')
+    fd, temporary = tempfile.mkstemp(prefix='.diagnostic-', dir=parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(record, stream, sort_keys=True)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchmod(stream.fileno(), 0o644)
+        os.replace(temporary, destination)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def emit_diagnostic(scope, phase, status, code=None, *, error=None, logs=()):
+    if ROOT != INSTALL or os.geteuid() != 0:
+        return  # Offline tests/checkouts never touch the installed status.
+    try:
+        evidence = ''.join(private_diagnostic_text(path) for path in logs if path.exists())
+        code = code or diagnostic_hint(phase, error, evidence)
+        write_diagnostic(scope, phase, status, code)
+    except (OSError, ValueError):
+        # Status export cannot mask a primary failure or grant permission to run.
+        print('Safe diagnostic export unavailable; private evidence retained.', file=sys.stderr)
+
+
+def read_diagnostics():
+    result = {'notice': 'last-observed-snapshots-not-live-state; classification-is-a-hint'}
+    for scope in ('commissioning', 'development'):
+        path = INSTALL / 'candidates' / 'diagnostics' / (scope + '.json')
+        try:
+            protected(path)
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'r') as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 8192:
+                    raise ValueError('invalid diagnostic file')
+                data = json.load(stream)
+            clean = diagnostic_record(data['scope'], data['phase'], data['status'], data['classification_hint'],
+                                      source=data['source'], observed_at=data['observed_at'])
+            if data != clean or clean['scope'] != scope:
+                raise ValueError('invalid diagnostic schema')
+            age = (datetime.now(ZoneInfo('UTC')) - datetime.fromisoformat(clean['observed_at'])).total_seconds()
+            result[scope] = dict(clean, stale_or_clock_skew=age < 0 or age > 86400)
+        except (OSError, ValueError, KeyError, TypeError):
+            result[scope] = {'status': 'unavailable', 'next_action': 'operator-export-diagnostics'}
+    return result
 # Reviewed standalone Linux x86-64 package, 0.154.0. Sources are supplied by
 # the operator; no downloads, version selection or authentication copying.
 CODEX_FILES = {
@@ -627,7 +767,11 @@ def launch_test_once(store, policy):
 
 def run(store, policy, *, test_once=False):
     global WORK_DEADLINE
-    operator = readiness(store, policy)
+    try:
+        operator = readiness(store, policy)
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        emit_diagnostic('development', 'preflight', 'failed', error=error)
+        raise
     if test_once:
         operator = dict(operator, automatic_merge=False)
     with store.locked():
@@ -650,10 +794,19 @@ def run(store, policy, *, test_once=False):
             print('Private single-run result: ' + str(result_path), flush=True)
         try:
             _run_locked(store, policy, state, operator, run_id, test_window, result)
-        except (ValueError, OSError, subprocess.SubprocessError):
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
             if result['status'] != 'blocked':
                 result['status'] = 'failed'
+            emit_diagnostic('development', result.get('phase', 'preflight'), result['status'],
+                            'run-blocked' if result['status'] == 'blocked' else None, error=error,
+                            logs=tuple(STATE / 'runs' / run_id / name for name in (
+                                'worker.jsonl', 'worker.jsonl.stderr.log', 'review.jsonl', 'review.jsonl.stderr.log')))
             raise
+        else:
+            status = result['status']
+            emit_diagnostic('development', result.get('phase', 'preflight'),
+                            'passed' if status == 'completed' else status,
+                            {'completed': 'none', 'blocked': 'run-blocked', 'needs-decision': 'needs-decision'}.get(status, 'in-progress'))
         finally:
             WORK_DEADLINE = None
             if result_path:
@@ -675,9 +828,11 @@ def _run_locked(store, policy, state, operator, run_id, test_window, result):
     WORK_DEADLINE = decision['window']['work_deadline']
     try:
         result['phase'] = 'authentication'
+        emit_diagnostic('development', 'authentication', 'running', 'in-progress')
         service('worker', [INSTALL / 'bin/codex', 'login', 'status'], seconds=30)
         service('publisher', ['gh', 'auth', 'status'], seconds=30)
         result['phase'] = 'review-refresh'
+        emit_diagnostic('development', 'review-refresh', 'running', 'in-progress')
         refresh_reviews(store, state, policy, operator)
         report(store, state, policy, urgent=bool(state.get('notification_pending')))
         state['notification_pending'] = False
@@ -704,10 +859,12 @@ def _run_locked(store, policy, state, operator, run_id, test_window, result):
     store.save(state)
     try:
         result['phase'] = 'development-checks-review-publication'
+        emit_diagnostic('development', result['phase'], 'running', 'in-progress')
         develop(store, state, policy, operator, task, run_id, decision['window']['work_deadline'])
         if test_window is not None:
             entry = state['tasks'][task['id']]
             result.update({'outcome': entry['status'], 'pr': entry.get('pr'), 'phase': 'notification'})
+            emit_diagnostic('development', 'notification', 'running', 'in-progress')
             try:
                 report(store, state, policy, force=True)
             except (ValueError, OSError, subprocess.SubprocessError):
@@ -748,3 +905,4 @@ def watchdog(store):
             state['last_result'] = public_summary(active['task'], 'blocked')
             # Retain active record until an operator verifies/acknowledges it.
             store.save(state)
+            emit_diagnostic('development', 'watchdog', 'interrupted', 'interrupted')

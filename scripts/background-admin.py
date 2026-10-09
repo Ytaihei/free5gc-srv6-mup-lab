@@ -16,7 +16,9 @@ import uuid
 
 from background_development import Store, atomic_json, digest, load_policy, safe_relative
 from background_executor import (ACCOUNTS, INSTALL, ROOT, STATE, protected, service,
-                                 watchdog, worker_work_parent, launch_test_once, run, verify_codex_bundle)
+                                 watchdog, worker_work_parent, launch_test_once, run, verify_codex_bundle,
+                                 diagnostic_hint, emit_diagnostic, private_diagnostic_text,
+                                 read_diagnostics, write_diagnostic)
 
 
 def directory_denied(path):
@@ -187,6 +189,38 @@ def retry_task(store, state, policy, task_id, run_id):
     print('Task requeued; evidence retained, queue still paused. Resume explicitly.')
 
 
+def export_commissioning_diagnostic(run_id):
+    if uuid.UUID(hex=run_id).hex != run_id:
+        raise ValueError('exact commissioning ID required')
+    directory = STATE / 'commissioning' / run_id
+    path = directory / 'result.json'
+    result = json.loads(private_diagnostic_text(path))
+    if not isinstance(result, dict):
+        raise ValueError('invalid commissioning phase evidence')
+    phases = result.get('phases')
+    allowed = {'worker-auth', 'publisher-auth', 'isolation-probe', 'worker-workspace', 'worker-tools', 'source-checks'}
+    if (not isinstance(phases, dict) or not phases or type(result.get('complete')) is not bool
+            or any(name not in allowed or not isinstance(status, str) or status not in {'running', 'passed', 'failed'}
+                   for name, status in phases.items())):
+        raise ValueError('invalid commissioning phase evidence')
+    phase = next(reversed(phases))
+    status = phases[phase]
+    if result['complete']:
+        if set(phases) != allowed or any(status != 'passed' for status in phases.values()):
+            raise ValueError('inconsistent commissioning evidence')
+        phase, status = 'finished', 'passed'
+    code = 'none' if status == 'passed' else 'in-progress'
+    if status == 'failed':
+        log = directory / (phase + ('.jsonl' if phase == 'worker-tools' else '.log'))
+        evidence = ''.join(private_diagnostic_text(item) for item in (log, Path(str(log) + '.stderr.log'))
+                           if item.exists())
+        code = diagnostic_hint(phase, evidence=evidence)
+    from datetime import datetime, timezone
+    observed_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+    write_diagnostic('commissioning', phase, status, code, source='retained', observed_at=observed_at)
+    print('Sanitized commissioning snapshot exported. Raw evidence remains private.')
+
+
 def commission(store, state, author_name, author_email):
     for value in (author_name, author_email):
         if not value.strip() or '\n' in value:
@@ -218,6 +252,7 @@ def commission(store, state, author_name, author_email):
         result['phases'][name] = 'running'
         atomic_json(evidence / 'result.json', result)
         print('Commissioning: ' + name, flush=True)
+        emit_diagnostic('commissioning', name, 'running', 'in-progress')
         log = evidence / (name + ('.jsonl' if name == 'worker-tools' else '.log'))
         try:
             if name == 'worker-workspace':
@@ -235,6 +270,8 @@ def commission(store, state, author_name, author_email):
                 atomic_json(log, {'error': str(error)})
             result['phases'][name] = 'failed'
             atomic_json(evidence / 'result.json', result)
+            emit_diagnostic('commissioning', name, 'failed', error=error,
+                            logs=(log, Path(str(log) + '.stderr.log')))
             raise ValueError(f'{name} failed; inspect private log {log}') from error
         result['phases'][name] = 'passed'
         atomic_json(evidence / 'result.json', result)
@@ -242,6 +279,7 @@ def commission(store, state, author_name, author_email):
     atomic_json(INSTALL / 'operator.json', operator)
     result['complete'] = True
     atomic_json(evidence / 'result.json', result)
+    emit_diagnostic('commissioning', 'finished', 'passed', 'none')
     print('Code-only isolation/auth checks passed. Still paused; auto-merge and live lab operations remain off.')
     print('Private commissioning evidence: ' + str(evidence))
 
@@ -249,6 +287,9 @@ def commission(store, state, author_name, author_email):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
+    sub.add_parser('diagnostics', help='read sanitized last-observed diagnostics without sudo')
+    export = sub.add_parser('diagnostics-export', help='export one retained commissioning result without raw logs')
+    export.add_argument('--commissioning', required=True)
     sub.add_parser('watchdog')
     sub.add_parser('test-once', help='launch one bounded code-only trial now; may create a PR')
     sub.add_parser('_execute-test-once', help=argparse.SUPPRESS)
@@ -263,6 +304,9 @@ def main():
     retry.add_argument('--task', required=True)
     retry.add_argument('--run', required=True)
     args = parser.parse_args()
+    if args.action == 'diagnostics':
+        print(json.dumps(read_diagnostics(), ensure_ascii=False, indent=2))
+        return
     if args.action == 'probe-isolation':
         isolation_probe()
         return
@@ -293,6 +337,11 @@ def main():
         return
     with store.locked():
         state = store.read()
+        if args.action == 'diagnostics-export':
+            if state.get('active'):
+                raise ValueError('cannot replace diagnostics during active development')
+            export_commissioning_diagnostic(args.commissioning)
+            return
         if args.action == 'retry-task':
             retry_task(store, state, load_policy(), args.task, args.run)
             return
