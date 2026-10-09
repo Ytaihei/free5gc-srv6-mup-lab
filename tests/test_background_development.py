@@ -30,6 +30,166 @@ admin = importlib.util.module_from_spec(ADMIN_SPEC)
 ADMIN_SPEC.loader.exec_module(admin)
 
 
+class SafeDiagnosticTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.install = self.root / 'install'
+        (self.install / 'candidates').mkdir(parents=True)
+        self.state = self.root / 'private'
+        self.state.mkdir(mode=0o700)
+        for mocked in (patch.object(executor, 'INSTALL', self.install),
+                       patch.object(executor, 'ROOT', self.install),
+                       patch.object(executor.os, 'geteuid', return_value=0),
+                       patch.object(executor, 'protected'), patch.object(admin, 'protected'),
+                       patch.object(admin, 'STATE', self.state)):
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
+    def record_path(self, scope='commissioning'):
+        return self.install / 'candidates/diagnostics' / (scope + '.json')
+
+    def test_whitelist_projection_never_exports_private_text(self):
+        secret = 'PRIVATE_SENTINEL /home/private-host api-key-placeholder person@example.invalid 192.0.2.12'
+        log = self.state / 'worker.jsonl'
+        bg.atomic_json(log, {'type': 'error', 'message': secret + ' bwrap: operation not permitted'})
+        original = log.read_bytes()
+        executor.emit_diagnostic('commissioning', 'worker-tools', 'failed',
+                                 error=ValueError(secret), logs=(log,))
+        result = executor.read_diagnostics()['commissioning']
+        self.assertEqual(result['classification_hint'], 'sandbox-denied')
+        self.assertEqual(result['next_action'], 'operator-inspect-isolation-do-not-disable')
+        public = self.record_path().read_text()
+        for value in secret.split():
+            self.assertNotIn(value, public)
+        self.assertNotIn(str(log), public)
+        self.assertEqual(log.read_bytes(), original)
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.state.stat().st_mode & 0o777, 0o700)
+
+    def test_public_permissions_under_private_umask_and_atomic_replacement(self):
+        previous = os.umask(0o077)
+        try:
+            executor.write_diagnostic('commissioning', 'worker-tools', 'running', 'in-progress')
+            executor.write_diagnostic('commissioning', 'worker-tools', 'failed', 'tool-execution-error')
+        finally:
+            os.umask(previous)
+        path = self.record_path()
+        self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(path.parent.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(json.loads(path.read_text())['status'], 'failed')
+        self.assertEqual(list(path.parent.glob('.diagnostic-*')), [])
+
+    def test_invalid_enum_and_uninstalled_writer_are_refused(self):
+        for args in [('private', 'preflight', 'failed', 'none'),
+                     ('commissioning', '/private/path', 'failed', 'none'),
+                     ('commissioning', 'preflight', 'secret-text', 'none'),
+                     ('commissioning', 'preflight', 'failed', 'private-message')]:
+            with self.subTest(args=args), self.assertRaisesRegex(ValueError, 'fixed enums'):
+                executor.write_diagnostic(*args)
+        with patch.object(executor.os, 'geteuid', return_value=1000):
+            with self.assertRaisesRegex(ValueError, 'installed coordinator'):
+                executor.write_diagnostic('commissioning', 'preflight', 'failed', 'unknown-failure')
+        self.assertFalse(self.record_path().exists())
+
+    def test_classifier_returns_only_known_hints(self):
+        cases = [('codex-code-mode-host: No such file', None, 'tool-host-missing'),
+                 ('sandbox: Permission denied', None, 'sandbox-denied'),
+                 ('{"type": "error", "message": "private"}', None, 'tool-execution-error'),
+                 ('', executor.WorkerExecutionError('incomplete event private'), 'invalid-worker-events'),
+                 ('', FileNotFoundError('private'), 'artifact-unverified'),
+                 ('', subprocess.TimeoutExpired('private command', 3), 'timeout'),
+                 ('unrecognized secret error', None, 'unknown-failure')]
+        for evidence, error, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(executor.diagnostic_hint('worker-tools', error, evidence), expected)
+
+    def test_reader_requires_no_private_state_or_subprocess_and_marks_old_snapshot(self):
+        executor.write_diagnostic('commissioning', 'worker-tools', 'failed', 'unknown-failure',
+                                  source='retained', observed_at='2020-01-01T00:00:00+00:00')
+        with patch.object(bg.Store, 'read', side_effect=AssertionError('private state read')), \
+                patch.object(executor.subprocess, 'run') as command:
+            result = executor.read_diagnostics()
+            command.assert_not_called()
+        self.assertTrue(result['commissioning']['stale_or_clock_skew'])
+        self.assertEqual(result['development']['status'], 'unavailable')
+        self.assertIn('not-live-state', result['notice'])
+
+    def test_reader_rejects_extra_fields_invalid_timestamp_and_large_file(self):
+        executor.write_diagnostic('commissioning', 'worker-tools', 'failed', 'unknown-failure')
+        path = self.record_path()
+        original = json.loads(path.read_text())
+        for invalid in [dict(original, secret='PRIVATE_SENTINEL'),
+                        dict(original, observed_at='PRIVATE_SENTINEL'),
+                        dict(original, next_action='PRIVATE_SENTINEL'), ['PRIVATE_SENTINEL']]:
+            path.write_text(json.dumps(invalid))
+            result = executor.read_diagnostics()
+            self.assertEqual(result['commissioning']['status'], 'unavailable')
+            self.assertNotIn('PRIVATE_SENTINEL', json.dumps(result))
+        path.write_text('X' * 8193)
+        self.assertEqual(executor.read_diagnostics()['commissioning']['status'], 'unavailable')
+
+    def test_link_destinations_and_private_evidence_links_are_refused(self):
+        executor.write_diagnostic('commissioning', 'preflight', 'failed', 'unknown-failure')
+        path = self.record_path()
+        path.unlink()
+        target = self.state / 'secret'
+        target.write_text('PRIVATE_SENTINEL')
+        target.chmod(0o600)
+        path.symlink_to(target)
+        with self.assertRaises(ValueError):
+            executor.write_diagnostic('commissioning', 'preflight', 'failed', 'unknown-failure')
+        self.assertEqual(executor.read_diagnostics()['commissioning']['status'], 'unavailable')
+        with self.assertRaises(OSError):
+            executor.private_diagnostic_text(path)
+        self.assertEqual(target.read_text(), 'PRIVATE_SENTINEL')
+
+    def test_export_failure_is_generic_and_does_not_mask_original_operation(self):
+        with patch.object(executor, 'write_diagnostic', side_effect=OSError('PRIVATE_SENTINEL')), \
+                contextlib.redirect_stderr(io.StringIO()) as output:
+            executor.emit_diagnostic('commissioning', 'worker-tools', 'failed', 'unknown-failure')
+        self.assertNotIn('PRIVATE_SENTINEL', output.getvalue())
+        self.assertIn('unavailable', output.getvalue())
+
+    def test_retained_export_does_not_execute_or_modify_private_evidence(self):
+        run_id = 'a' * 32
+        directory = self.state / 'commissioning' / run_id
+        directory.mkdir(parents=True)
+        result = directory / 'result.json'
+        bg.atomic_json(result, {'complete': False, 'phases': {'worker-auth': 'passed', 'worker-tools': 'failed'},
+                                'worker_workspace': '/private/host/path'})
+        log = directory / 'worker-tools.jsonl'
+        bg.atomic_json(log, {'type': 'error', 'message': 'codex-code-mode-host not found PRIVATE_SENTINEL'})
+        before = {p.name: p.read_bytes() for p in directory.iterdir()}
+        with patch.object(admin, 'service') as service:
+            admin.export_commissioning_diagnostic(run_id)
+            service.assert_not_called()
+        self.assertEqual(before, {p.name: p.read_bytes() for p in directory.iterdir()})
+        diagnostic = executor.read_diagnostics()['commissioning']
+        self.assertEqual(diagnostic['classification_hint'], 'tool-host-missing')
+        self.assertEqual(diagnostic['source'], 'retained')
+        self.assertNotIn('/private', json.dumps(diagnostic))
+        for invalid in ('../../private', 'A' * 32):
+            with self.assertRaises(ValueError):
+                admin.export_commissioning_diagnostic(invalid)
+        for invalid in ([], {}, {'complete': False, 'phases': {'worker-tools': []}}):
+            bg.atomic_json(result, invalid)
+            with self.assertRaisesRegex(ValueError, 'invalid commissioning phase evidence'):
+                admin.export_commissioning_diagnostic(run_id)
+
+    def test_diagnostics_cli_is_read_only_and_export_requires_installed_root(self):
+        with patch.object(sys, 'argv', ['background-admin.py', 'diagnostics']), \
+                patch.object(admin, 'read_diagnostics', return_value={'status': 'unavailable'}), \
+                patch.object(bg.Store, 'read', side_effect=AssertionError('private read')), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            admin.main()
+        self.assertEqual(json.loads(output.getvalue()), {'status': 'unavailable'})
+        with patch.object(sys, 'argv', ['background-admin.py', 'diagnostics-export', '--commissioning', 'a' * 32]):
+            with self.assertRaisesRegex(ValueError, 'root-owned installed'):
+                admin.main()
+
+
 class SingleRunTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -130,8 +290,11 @@ class SingleRunTests(unittest.TestCase):
 
     def test_authentication_failure_pauses_and_preserves_private_phase(self):
         self.service.side_effect = ValueError('authentication failed')
-        with self.assertRaisesRegex(ValueError, 'authentication failed'):
-            executor.run(self.store, self.policy, test_once=True)
+        with patch.object(executor, 'emit_diagnostic') as emit:
+            with self.assertRaisesRegex(ValueError, 'authentication failed'):
+                executor.run(self.store, self.policy, test_once=True)
+        self.assertEqual(emit.call_args.args[:3], ('development', 'authentication', 'failed'))
+        self.assertIs(emit.call_args.kwargs['error'], self.service.side_effect)
         self.assertEqual(self.result()['phase'], 'authentication')
         self.assertEqual(self.result()['status'], 'failed')
         self.assertTrue(self.store.read()['paused'])
@@ -458,11 +621,14 @@ class CommissioningTests(unittest.TestCase):
             self.service(role, command, **kwargs)
             if 'probe-isolation' in command:
                 raise ValueError('probe failed')
-        with patch.object(admin, 'service', side_effect=fail) as service:
+        with patch.object(admin, 'service', side_effect=fail) as service, \
+                patch.object(admin, 'emit_diagnostic') as emit:
             with self.assertRaisesRegex(ValueError, 'isolation-probe failed; inspect private log'):
                 admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
         self.assertEqual(service.call_count, 3)
         report = next((self.store.directory / 'commissioning').glob('*/result.json'))
+        self.assertEqual(emit.call_args.args, ('commissioning', 'isolation-probe', 'failed'))
+        self.assertEqual(emit.call_args.kwargs['logs'][0], report.parent / 'isolation-probe.log')
         self.assertEqual(json.loads(report.read_text())['phases']['isolation-probe'], 'failed')
         self.assertTrue((report.parent / 'isolation-probe.log').exists())
         self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
