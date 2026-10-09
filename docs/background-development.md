@@ -280,6 +280,73 @@ subsequent `diagnostics` reads do not. A successful export is not successful
 commissioning: do not resume a failed installation merely because its diagnostic
 snapshot is now readable.
 
+### Group-only operational log history
+
+For routine investigation without sudo, an operator can explicitly enroll a
+local human account in the dedicated `mup-bg-log-readers` group. Apply the
+reviewed coordinator update first; while the queue is paused and no work is
+active, run this once, replacing `LOCAL_USER` with the existing local username:
+
+```bash
+sudo /opt/srv6-mup-background/venv/bin/python3 \
+  /opt/srv6-mup-background/scripts/background-admin.py grant-log-access --user LOCAL_USER
+```
+
+The command creates a dedicated system group and records its GID privately. It
+refuses an unmanaged pre-existing group/directory rather than adopting it, and
+refuses root and the execution accounts. Repeating enrollment is safe for a
+managed group; partial setup is retained for inspection. The root-owned
+`/opt/srv6-mup-background/candidates/operator-logs/` directory is `0750` and its
+atomic JSON event files are `0640`, owned by root and the reader group. Members
+can read, not write or delete them. Raw evidence remains `0600` in private state;
+no recursive chmod, general journal access or sudoers grant is introduced.
+
+Start a new login session so group membership takes effect, then read:
+
+```bash
+/opt/srv6-mup-background/venv/bin/python3 \
+  /opt/srv6-mup-background/scripts/background-admin.py logs --limit 20
+```
+
+For an existing shell, this fixed command can activate the newly granted group
+without sudo or a logout:
+
+```bash
+sg mup-bg-log-readers -c '/opt/srv6-mup-background/venv/bin/python3 /opt/srv6-mup-background/scripts/background-admin.py logs --limit 20'
+```
+
+An agent running as the enrolled user has the same read access; an already
+running agent may need a new session or the same `sg` command. The reader uses
+Python's standard library, not `rg`, `jq`, a model, private-state access or a
+privileged subprocess. It returns the newest 20 exports by default (maximum
+200), validates ownership, permissions and the exact schema, and returns
+`unavailable` on denied access or invalid data. The public `diagnostics` snapshots
+remain separate and do not gain these group-only details.
+
+Commissioning phase outcomes and development outcomes automatically append
+events after enrollment. Failed runs also inspect the retained worker, review
+and check logs. This is a **structured projection, not raw-log access**: each
+event contains the existing diagnostic fields, evidence availability and fixed
+signal labels such as `bwrap`, `loopback`, `netlink-address`, `mount`,
+`operation-not-permitted` and `permission-denied`. Authentication log content is
+never read for this projection. Model responses, commands, filenames, IP
+addresses, tokens and arbitrary error text are not copied, even when a secret
+is unfamiliar to a redaction pattern. Scanning is bounded to the first 256 KiB
+of each input file. Labels may match quoted/model-generated text and are only
+untrusted hints, not proof of a failing syscall; unknown errors and errors beyond
+the bound can still require an operator's private investigation. No labels
+authorize a repair, permission change or resume.
+
+To inspect an older commissioning failure, run `diagnostics-export` with its
+exact ID as described above **after enrollment**. It also appends a group-only
+event without rerunning the model or altering the original evidence. New events
+keep the original observation time for retained results. History is not a live
+service status or full transcript, can be incomplete after an abrupt stop/export
+failure, and is retained without automatic cleanup. It is not published to
+GitHub or a network endpoint. Revocation requires an administrator to remove
+group membership and end existing sessions that still hold the group; changing
+membership alone does not revoke already-running processes or copies already read.
+
 ## Run, pause and observe
 
 After commissioning, an operator may resume **code-only** development and enable

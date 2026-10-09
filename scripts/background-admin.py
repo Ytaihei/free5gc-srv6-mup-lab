@@ -2,10 +2,12 @@
 """Explicit commissioning and interruption acknowledgement; never a lab shell."""
 import argparse
 import errno
+import grp
 import json
 import os
 from pathlib import Path
 import pwd
+import re
 import shutil
 import subprocess
 import socket
@@ -18,7 +20,9 @@ from background_development import Store, atomic_json, digest, load_policy, safe
 from background_executor import (ACCOUNTS, INSTALL, ROOT, STATE, protected, service,
                                  watchdog, worker_work_parent, launch_test_once, run, verify_codex_bundle,
                                  diagnostic_hint, emit_diagnostic, private_diagnostic_text,
-                                 read_diagnostics, write_diagnostic)
+                                 read_diagnostics, write_diagnostic, diagnostic_record,
+                                 LOG_GROUP, AUTH_PHASES, operator_log_directory,
+                                 write_operator_event, read_operator_logs)
 
 
 def directory_denied(path):
@@ -210,15 +214,55 @@ def export_commissioning_diagnostic(run_id):
             raise ValueError('inconsistent commissioning evidence')
         phase, status = 'finished', 'passed'
     code = 'none' if status == 'passed' else 'in-progress'
+    evidence = ''
     if status == 'failed':
-        log = directory / (phase + ('.jsonl' if phase == 'worker-tools' else '.log'))
-        evidence = ''.join(private_diagnostic_text(item) for item in (log, Path(str(log) + '.stderr.log'))
-                           if item.exists())
+        if phase not in AUTH_PHASES:
+            log = directory / (phase + ('.jsonl' if phase == 'worker-tools' else '.log'))
+            evidence = ''.join(private_diagnostic_text(item) for item in (log, Path(str(log) + '.stderr.log'))
+                               if item.exists())
         code = diagnostic_hint(phase, evidence=evidence)
     from datetime import datetime, timezone
     observed_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
     write_diagnostic('commissioning', phase, status, code, source='retained', observed_at=observed_at)
+    write_operator_event(diagnostic_record('commissioning', phase, status, code,
+                                         source='retained', observed_at=observed_at), evidence)
     print('Sanitized commissioning snapshot exported. Raw evidence remains private.')
+
+
+def grant_log_access(username):
+    """Explicit operator enrollment; never add execution accounts or alter raw logs."""
+    if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', username):
+        raise ValueError('invalid local reader account')
+    user = pwd.getpwnam(username)
+    if user.pw_uid < 1000 or username in ACCOUNTS.values():
+        raise ValueError('log access requires a non-service, non-root local user')
+    marker = STATE / 'log-access.json'
+    parent = INSTALL / 'candidates' / 'operator-logs'
+    protected(parent.parent)
+    try:
+        group = grp.getgrnam(LOG_GROUP)
+    except KeyError:
+        group = None
+    if marker.exists() or marker.is_symlink():
+        saved = json.loads(private_diagnostic_text(marker))
+        if not group or saved != {'version': 1, 'group': LOG_GROUP, 'gid': group.gr_gid}:
+            raise ValueError('log group differs from its retained ownership record')
+    else:
+        if group or parent.exists() or parent.is_symlink():
+            raise ValueError('unmanaged log group/directory retained; inspect before enrollment')
+        subprocess.run(['/usr/sbin/groupadd', '--system', LOG_GROUP], check=True)
+        group = grp.getgrnam(LOG_GROUP)
+        atomic_json(marker, {'version': 1, 'group': LOG_GROUP, 'gid': group.gr_gid})
+    if group.gr_gid == 0 or any(account in group.gr_mem for account in ACCOUNTS.values()):
+        raise ValueError('unsafe log reader group')
+    if not parent.exists() and not parent.is_symlink():
+        parent.mkdir(mode=0o700)
+        os.chown(parent, 0, group.gr_gid)
+        parent.chmod(0o750)
+    operator_log_directory()
+    if user.pw_gid != group.gr_gid and username not in group.gr_mem:
+        subprocess.run(['/usr/sbin/usermod', '--append', '--groups', LOG_GROUP, username], check=True)
+    print('Read-only sanitized log access granted. Start a new login session or use sg; raw evidence remains private.')
 
 
 def commission(store, state, author_name, author_email):
@@ -275,6 +319,7 @@ def commission(store, state, author_name, author_email):
             raise ValueError(f'{name} failed; inspect private log {log}') from error
         result['phases'][name] = 'passed'
         atomic_json(evidence / 'result.json', result)
+        emit_diagnostic('commissioning', name, 'passed', 'none')
     operator.update({'author_name': author_name, 'author_email': author_email, 'commissioned': True})
     atomic_json(INSTALL / 'operator.json', operator)
     result['complete'] = True
@@ -288,6 +333,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     sub.add_parser('diagnostics', help='read sanitized last-observed diagnostics without sudo')
+    logs = sub.add_parser('logs', help='read group-only sanitized operational history without sudo or rg')
+    logs.add_argument('--limit', type=int, default=20)
+    access = sub.add_parser('grant-log-access', help='enroll a local operator in the dedicated read-only log group')
+    access.add_argument('--user', required=True)
     export = sub.add_parser('diagnostics-export', help='export one retained commissioning result without raw logs')
     export.add_argument('--commissioning', required=True)
     sub.add_parser('watchdog')
@@ -304,6 +353,9 @@ def main():
     retry.add_argument('--task', required=True)
     retry.add_argument('--run', required=True)
     args = parser.parse_args()
+    if args.action == 'logs':
+        print(json.dumps(read_operator_logs(args.limit), ensure_ascii=False, indent=2))
+        return
     if args.action == 'diagnostics':
         print(json.dumps(read_diagnostics(), ensure_ascii=False, indent=2))
         return
@@ -337,6 +389,11 @@ def main():
         return
     with store.locked():
         state = store.read()
+        if args.action == 'grant-log-access':
+            if not state.get('paused') or state.get('active'):
+                raise ValueError('pause and recover active work before changing log access')
+            grant_log_access(args.user)
+            return
         if args.action == 'diagnostics-export':
             if state.get('active'):
                 raise ValueError('cannot replace diagnostics during active development')
