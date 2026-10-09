@@ -3,7 +3,7 @@ module github.com/Ytaihei/free5gc-srv6-mup-lab
 go 1.26.9
 
 require (
-	connectrpc.com/connect v1.20.0
+	connectrpc.com/connect v1.21.0
 	github.com/free5gc/pfcp v1.1.2
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.6.0
