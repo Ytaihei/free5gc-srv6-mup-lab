@@ -147,6 +147,14 @@ def workspace_probe():
 def commissioning_tools(workspace, evidence, model):
     """Exercise the actual configured model/tool path, not just --version/login."""
     verify_codex_bundle()
+    # Fixed, model-free sandbox smoke test in the actual worker service. Use
+    # the same PATH preference as the worker, with its pinned helper fallback.
+    path = str(INSTALL / 'venv/bin') + ':' + str(INSTALL / 'bin') + ':/usr/bin:/bin'
+    bwrap = Path(shutil.which('bwrap', path=path) or INSTALL / 'codex-resources/bwrap').resolve()
+    protected(bwrap, executable=True)
+    service('worker', [bwrap, '--unshare-user', '--unshare-net', '--unshare-pid',
+                       '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--', '/bin/true'],
+            cwd=workspace, seconds=30, output_file=evidence / 'worker-sandbox.log')
     challenge = uuid.uuid4().hex
     probe = workspace / 'tool-probe.txt'
     prompt = (
@@ -218,7 +226,10 @@ def export_commissioning_diagnostic(run_id):
     if status == 'failed':
         if phase not in AUTH_PHASES:
             log = directory / (phase + ('.jsonl' if phase == 'worker-tools' else '.log'))
-            evidence = ''.join(private_diagnostic_text(item) for item in (log, Path(str(log) + '.stderr.log'))
+            logs = (log, Path(str(log) + '.stderr.log'))
+            if phase == 'worker-tools':
+                logs += (directory / 'worker-sandbox.log',)
+            evidence = ''.join(private_diagnostic_text(item) for item in logs
                                if item.exists())
         code = diagnostic_hint(phase, evidence=evidence)
     from datetime import datetime, timezone
@@ -314,8 +325,11 @@ def commission(store, state, author_name, author_email):
                 atomic_json(log, {'error': str(error)})
             result['phases'][name] = 'failed'
             atomic_json(evidence / 'result.json', result)
+            logs = (log, Path(str(log) + '.stderr.log'))
+            if name == 'worker-tools':
+                logs += (evidence / 'worker-sandbox.log',)
             emit_diagnostic('commissioning', name, 'failed', error=error,
-                            logs=(log, Path(str(log) + '.stderr.log')))
+                            logs=logs)
             raise ValueError(f'{name} failed; inspect private log {log}') from error
         result['phases'][name] = 'passed'
         atomic_json(evidence / 'result.json', result)

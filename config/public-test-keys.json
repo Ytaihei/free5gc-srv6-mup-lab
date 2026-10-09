@@ -4,7 +4,7 @@
   "note": "Provenance only, never a secret-scanner exemption or approval to use shared keys for authentication.",
   "upstreams": {
     "free5gc": "https://raw.githubusercontent.com/free5gc/free5gc-compose/e4e2acebad6d6a8c49cfb03a97d9a09dd40c55c7/cert/",
-    "go": "https://raw.githubusercontent.com/golang/go/go1.26.8/src/crypto/x509/"
+    "go": "https://raw.githubusercontent.com/golang/go/go1.26.9/src/crypto/x509/"
   },
   "keys": [
     {"path": "/free5gc/cert/nrf.key", "sha256": "df095067d859b62d19d1d0d9776beff45625320118d6319f573ee033aac56c3b", "upstream": "free5gc", "file": "nrf.key", "classification": "public-upstream-default-key"},

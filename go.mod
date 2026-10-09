@@ -1,6 +1,6 @@
 module github.com/Ytaihei/free5gc-srv6-mup-lab
 
-go 1.26.8
+go 1.26.9
 
 require (
 	connectrpc.com/connect v1.20.0

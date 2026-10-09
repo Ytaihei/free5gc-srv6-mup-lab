@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import subprocess
 import socket
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -95,6 +96,8 @@ class SafeDiagnosticTests(unittest.TestCase):
 
     def test_classifier_returns_only_known_hints(self):
         cases = [('codex-code-mode-host: No such file', None, 'tool-host-missing'),
+                 ('bwrap: loopback: Failed to create NETLINK_ROUTE socket: Address family not supported by protocol',
+                  ValueError('failed'), 'sandbox-address-family-denied'),
                  ('sandbox: Permission denied', None, 'sandbox-denied'),
                  ('{"type": "error", "message": "private"}', None, 'tool-execution-error'),
                  ('', executor.WorkerExecutionError('incomplete event private'), 'invalid-worker-events'),
@@ -318,11 +321,15 @@ class OperatorLogTests(unittest.TestCase):
         directory.mkdir(parents=True)
         bg.atomic_json(directory / 'result.json', {'complete': False, 'phases': {'worker-tools': 'failed'}})
         bg.atomic_json(directory / 'worker-tools.jsonl', {'message': 'bwrap: mount: Permission denied PRIVATE_SECRET'})
+        bg.atomic_json(directory / 'worker-sandbox.log', {
+            'message': 'bwrap: loopback: Failed to create NETLINK_ROUTE socket: Address family not supported by protocol'})
         before = {p.name: p.read_bytes() for p in directory.iterdir()}
         admin.export_commissioning_diagnostic('b' * 32)
         event = executor.read_operator_logs()['events'][0]
         self.assertEqual(event['record']['source'], 'retained')
-        self.assertEqual(event['signals'], ['bwrap', 'mount', 'permission-denied'])
+        self.assertEqual(event['signals'], ['bwrap', 'loopback', 'mount', 'netlink-socket',
+                                            'permission-denied', 'unsupported-address-family'])
+        self.assertEqual(event['record']['classification_hint'], 'sandbox-address-family-denied')
         self.assertEqual(before, {p.name: p.read_bytes() for p in directory.iterdir()})
 
     def test_logs_cli_needs_neither_root_nor_external_tools(self):
@@ -738,7 +745,7 @@ class CommissioningTests(unittest.TestCase):
     def test_every_phase_has_retained_evidence_and_success_remains_paused(self):
         with patch.object(admin, 'service', side_effect=self.service) as service:
             admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
-        self.assertEqual(service.call_count, 6)
+        self.assertEqual(service.call_count, 7)
         report = next((self.store.directory / 'commissioning').glob('*/result.json'))
         self.assertTrue(json.loads(report.read_text())['complete'])
         self.assertEqual(json.loads(report.read_text())['phases']['worker-tools'], 'passed')
@@ -749,7 +756,14 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(service.call_args.args[1], ['make', 'check'])
         self.assertEqual(source_tree.parent, self.install / 'candidates')
         self.assertFalse((source_tree / 'operator.json').exists())
-        self.assertEqual(len(list(report.parent.glob('*.log'))), 5)
+        self.assertEqual(len(list(report.parent.glob('*.log'))), 6)
+        sandbox = service.call_args_list[4]
+        self.assertEqual(sandbox.args[0], 'worker')
+        self.assertEqual(sandbox.args[1][1:], ['--unshare-user', '--unshare-net', '--unshare-pid',
+                                              '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--', '/bin/true'])
+        self.assertEqual(sandbox.kwargs['seconds'], 30)
+        self.assertEqual(sandbox.kwargs['output_file'], report.parent / 'worker-sandbox.log')
+        self.assertIn('exec', service.call_args_list[5].args[1])
         workspace = Path(json.loads(report.read_text())['worker_workspace'])
         self.assertEqual(workspace.parent, self.worker / 'work')
         self.assertEqual(workspace.stat().st_mode & 0o777, 0o700)
@@ -815,7 +829,7 @@ class CommissioningTests(unittest.TestCase):
         with patch.object(admin, 'service', side_effect=self.service) as service:
             with self.assertRaisesRegex(ValueError, 'source-checks failed; inspect private log'):
                 admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
-        self.assertEqual(service.call_count, 5)
+        self.assertEqual(service.call_count, 6)
         report = next((self.store.directory / 'commissioning').glob('*/result.json'))
         result = json.loads(report.read_text())
         self.assertEqual(result['phases']['source-checks'], 'failed')
@@ -864,6 +878,23 @@ class CommissioningTests(unittest.TestCase):
                 admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
         self.assertEqual(service.call_count, 4)
         self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+
+    def test_sandbox_failure_prevents_model_call_and_exports_probe_evidence(self):
+        def fail(role, command, **kwargs):
+            self.service(role, command, **kwargs)
+            if '--unshare-net' in command:
+                raise ValueError('sandbox probe failed')
+        with patch.object(admin, 'service', side_effect=fail) as service, \
+                patch.object(admin, 'emit_diagnostic') as emit:
+            with self.assertRaisesRegex(ValueError, 'worker-tools failed'):
+                admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
+        self.assertEqual(service.call_count, 5)
+        self.assertFalse(any('exec' in call.args[1] for call in service.call_args_list))
+        report = next((self.store.directory / 'commissioning').glob('*/result.json'))
+        self.assertIn(report.parent / 'worker-sandbox.log', emit.call_args.kwargs['logs'])
+        self.assertEqual(json.loads(report.read_text())['phases']['worker-tools'], 'failed')
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+        self.assertTrue(self.store.read()['paused'])
 
     def test_tool_probe_refuses_wrong_contents_and_symlinks(self):
         workspace = self.worker / 'probe'
@@ -1176,6 +1207,137 @@ class CoordinatorUpdateTests(unittest.TestCase):
         self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
         self.assertTrue(list((self.store.directory / 'updates').glob('*/installation.json')))
         self.assertTrue(self.store.read()['paused'])
+
+    def go_fixture(self):
+        for name in sorted(installer.GO_REPAIR_PATHS):
+            if name == 'config/versions.lock.yml':
+                payload = ('toolchains:\n  go:\n    version: 1.26.8\n    platform: linux-amd64\n'
+                           '    url: https://go.dev/dl/go1.26.8.linux-amd64.tar.gz\n'
+                           f'    sha256: {installer.GO_PREVIOUS_SHA256}\n').encode()
+            else:
+                payload = b'fixture 1.26.8\n'
+            for directory in (self.install, self.source):
+                path = directory / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload if directory == self.install else installer.go_repair_bytes(payload))
+            self.files.append(name)
+        for directory in (self.install, self.source):
+            (directory / 'config/public-source.json').write_text(json.dumps({'files': self.files}))
+        manifest = json.loads((self.install / 'installation.json').read_text())
+        manifest['files'].update({name: bg.digest(self.install / name) for name in self.files})
+        bg.atomic_json(self.install / 'installation.json', manifest)
+        (self.install / 'go/bin').mkdir(parents=True)
+        (self.install / 'go/VERSION').write_text('go1.26.8\n')
+        (self.install / 'go/bin/go').write_text('old SDK; never executed')
+        (self.install / 'bin/go').symlink_to('../go/bin/go')
+        archive = self.root / 'go.tar.gz'
+        with tarfile.open(archive, 'w:gz') as output:
+            for name, data in [('go/VERSION', b'go1.26.9\n'), ('go/bin/go', b'new SDK; never executed')]:
+                member = tarfile.TarInfo(name)
+                member.size, member.mode = len(data), 0o755 if name.endswith('/go') else 0o644
+                output.addfile(member, io.BytesIO(data))
+        # Pin validation is tested separately. Keep the production hash in the
+        # source fixture; replace only the archive reader for lifecycle tests.
+        return archive
+
+    def test_explicit_go_repair_preserves_sdk_and_recommission_gate(self):
+        archive = self.go_fixture()
+        with patch.object(installer, 'go_archive_payload', return_value=archive.read_bytes()), \
+                patch.object(installer.subprocess, 'run') as run:
+            installer.update_coordinator(go_archive=archive)
+            run.assert_not_called()
+        self.assertEqual((self.install / 'go/VERSION').read_text(), 'go1.26.9\n')
+        self.assertEqual(os.readlink(self.install / 'bin/go'), '../go/bin/go')
+        backup = next((self.store.directory / 'updates').glob('*/go-previous'))
+        self.assertEqual((backup / 'VERSION').read_text(), 'go1.26.8\n')
+        manifest = json.loads((self.install / 'installation.json').read_text())
+        self.assertEqual(manifest['go_archive']['sha256'], installer.GO_REPAIR_SHA256)
+        for name, expected in manifest['files'].items():
+            self.assertEqual(bg.digest(self.install / name), expected)
+        self.assertTrue(self.store.read()['paused'])
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+        with patch.object(installer, 'go_archive_payload', return_value=archive.read_bytes()):
+            installer.update_coordinator(go_archive=archive)
+        self.assertEqual(len(list((self.store.directory / 'updates').glob('*/go-previous'))), 2)
+
+    def test_go_pin_changes_still_require_explicit_archive(self):
+        self.go_fixture()
+        with self.assertRaisesRegex(ValueError, 'cannot change policy'):
+            installer.update_coordinator()
+        self.assertFalse((self.store.directory / 'updates').exists())
+
+    def test_go_repair_rejects_nonmechanical_and_unrelated_policy_changes(self):
+        archive = self.go_fixture()
+        for name in ['config/supply-chain-policy.yml', 'config/background-development.yml']:
+            with self.subTest(name=name):
+                path = self.source / name
+                original = path.read_bytes()
+                path.write_bytes(original + b'changed policy\n')
+                with patch.object(installer, 'go_archive_payload', return_value=archive.read_bytes()):
+                    with self.assertRaisesRegex(ValueError, 'exact reviewed|cannot change policy'):
+                        installer.update_coordinator(go_archive=archive)
+                path.write_bytes(original)
+        self.assertFalse((self.store.directory / 'updates').exists())
+
+    def test_go_archive_wrong_digest_and_symlink_refused(self):
+        archive = self.go_fixture()
+        with self.assertRaisesRegex(ValueError, 'upstream SHA-256'):
+            installer.update_coordinator(go_archive=archive)
+        link = self.root / 'linked.tar.gz'
+        link.symlink_to(archive)
+        with self.assertRaises(OSError):
+            installer.go_archive_payload(link)
+        self.assertFalse((self.store.directory / 'updates').exists())
+
+    def test_go_archive_verified_bytes_are_returned_without_execution(self):
+        archive = self.go_fixture()
+        with patch.object(installer, 'GO_REPAIR_SHA256', bg.digest(archive)), \
+                patch.object(installer.subprocess, 'run') as run:
+            self.assertEqual(installer.go_archive_payload(archive), archive.read_bytes())
+            run.assert_not_called()
+
+    def test_go_archive_rejects_traversal_links_duplicates_and_special_members(self):
+        cases = [('go/../escape', tarfile.REGTYPE), ('go/link', tarfile.SYMTYPE),
+                 ('go/hardlink', tarfile.LNKTYPE), ('go/device', tarfile.CHRTYPE),
+                 ('other/file', tarfile.REGTYPE), ('go/duplicate', tarfile.REGTYPE)]
+        for index, (name, kind) in enumerate(cases):
+            with self.subTest(name=name):
+                stream = io.BytesIO()
+                with tarfile.open(fileobj=stream, mode='w:gz') as archive:
+                    member = tarfile.TarInfo(name)
+                    member.type, member.linkname = kind, '/outside'
+                    archive.addfile(member)
+                    if name == 'go/duplicate':
+                        archive.addfile(member)
+                with self.assertRaises(ValueError):
+                    installer.stage_go_archive(stream.getvalue(), self.root / f'stage-{index}')
+
+    def test_go_repair_rejects_unexpected_launcher(self):
+        archive = self.go_fixture()
+        (self.install / 'bin/go').unlink()
+        (self.install / 'bin/go').symlink_to('/other/go')
+        with patch.object(installer, 'go_archive_payload', return_value=archive.read_bytes()):
+            with self.assertRaisesRegex(ValueError, 'expected SDK link'):
+                installer.update_coordinator(go_archive=archive)
+        self.assertFalse((self.store.directory / 'updates').exists())
+
+    def test_go_swap_failure_retains_old_sdk_manifest_and_paused_state(self):
+        archive = self.go_fixture()
+        original_manifest = (self.install / 'installation.json').read_bytes()
+        rename = os.rename
+        def fail(source, destination):
+            if Path(destination) == self.install / 'go':
+                raise OSError('simulated SDK swap failure')
+            return rename(source, destination)
+        with patch.object(installer, 'go_archive_payload', return_value=archive.read_bytes()), \
+                patch.object(installer.os, 'rename', side_effect=fail):
+            with self.assertRaisesRegex(OSError, 'SDK swap failure'):
+                installer.update_coordinator(go_archive=archive)
+        self.assertEqual((self.install / 'installation.json').read_bytes(), original_manifest)
+        self.assertTrue(list((self.store.directory / 'updates').glob('*/go-previous/VERSION')))
+        self.assertTrue(list((self.store.directory / 'updates').glob('*/go-staging/go/VERSION')))
+        self.assertTrue(self.store.read()['paused'])
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
 
 
 class InstallationTests(unittest.TestCase):
@@ -1555,6 +1717,25 @@ class WorkerEventTests(unittest.TestCase):
     EVENTS = [{'type': 'thread.started', 'thread_id': 'fixture'}, {'type': 'turn.started'},
               {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'Done'}},
               {'type': 'turn.completed', 'usage': {}}]
+
+    def test_netlink_is_worker_only_without_relaxing_other_boundaries(self):
+        for role in ('worker', 'checks', 'publisher'):
+            with self.subTest(role=role), patch.object(executor.subprocess, 'run',
+                    return_value=SimpleNamespace(returncode=0, stdout='')) as run:
+                executor.service(role, ['/bin/true'])
+            command = run.call_args_list[0].args[0]
+            properties = dict(command[i + 1].split('=', 1) for i, value in enumerate(command)
+                              if value == '--property')
+            families = 'AF_UNIX AF_INET AF_INET6' + (' AF_NETLINK' if role == 'worker' else '')
+            self.assertEqual(properties['RestrictAddressFamilies'], families)
+            self.assertEqual(properties['CapabilityBoundingSet'], '')
+            self.assertEqual(properties['NoNewPrivileges'], 'yes')
+            self.assertEqual(properties['IPAddressDeny'], executor.PRIVATE_NETS)
+            self.assertEqual(properties['IPAddressAllow'], '127.0.0.53/32')
+            self.assertEqual(properties['ProtectSystem'], 'strict')
+            self.assertIn('-/run/docker.sock', properties['InaccessiblePaths'])
+            self.assertIn('-/var/lib/srv6-mup-background', properties['InaccessiblePaths'])
+            self.assertEqual(properties['User'], executor.ACCOUNTS[role])
 
     def test_strict_events_reject_errors_even_with_turn_completed(self):
         with tempfile.TemporaryDirectory() as root:

@@ -2,6 +2,7 @@
 """Preview/install an immutable coordinator; never enable timers or copy auth."""
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import uuid
 
@@ -25,6 +27,79 @@ COORDINATOR_UPDATE_PATHS = {
     'docs/background-development.md', 'docs/background-development.ja.md',
     'config/documentation.json',
 }
+# Deliberately one reviewed security transition, not a general dependency updater.
+GO_REPAIR_VERSION = '1.26.9'
+GO_REPAIR_SHA256 = '42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d'
+GO_PREVIOUS_SHA256 = 'd0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b'
+GO_REPAIR_PATHS = {
+    'go.mod', 'config/versions.lock.yml', 'ansible/inventory/group_vars/all.yml',
+    'config/supply-chain-policy.yml', 'config/image-distribution-policy.yml',
+    'config/public-test-keys.json', 'docs/image-distribution.md', 'docs/image-distribution.ja.md',
+}
+
+
+def go_repair_bytes(payload):
+    return payload.replace(b'1.26.8', GO_REPAIR_VERSION.encode()).replace(
+        GO_PREVIOUS_SHA256.encode(), GO_REPAIR_SHA256.encode())
+
+
+def go_archive_payload(path):
+    """Verify the exact upstream archive before parsing or executing any bytes."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 100_000_000:
+            raise ValueError('Go archive must be a bounded regular file')
+        payload = stream.read(100_000_001)
+    if hashlib.sha256(payload).hexdigest() != GO_REPAIR_SHA256:
+        raise ValueError('Go archive differs from the reviewed upstream SHA-256')
+    return payload
+
+
+def stage_go_archive(payload, destination):
+    """Extract only plain bounded members into a new private staging directory."""
+    with tarfile.open(fileobj=io.BytesIO(payload), mode='r:gz') as archive:
+        members, names, total = [], set(), 0
+        for member in archive:
+            name = member.name.rstrip('/')
+            safe_relative(name)
+            if (name != 'go' and not name.startswith('go/')) or name in names:
+                raise ValueError('unexpected or duplicate Go archive path')
+            if not (member.isdir() or member.isreg()) or member.mode & 0o7000:
+                raise ValueError('Go archive links and special files are refused')
+            names.add(name)
+            total += member.size
+            if total > 600_000_000 or len(names) > 50_000:
+                raise ValueError('Go archive exceeds extraction bounds')
+            members.append(member)
+        destination.mkdir(mode=0o700)
+        archive.extractall(destination, members=members, filter='data')
+    sdk = destination / 'go'
+    if (sdk / 'VERSION').read_text().splitlines()[0] != 'go' + GO_REPAIR_VERSION:
+        raise ValueError('Go archive version differs from the reviewed version')
+    for entry in (sdk, *sdk.rglob('*')):
+        entry.chmod(0o755 if entry.is_dir() or entry.stat().st_mode & 0o111 else 0o644)
+    return sdk
+
+
+def check_go_repair_installation():
+    sdk = INSTALL / 'go'
+    protected(sdk)
+    if not sdk.is_dir() or sdk.is_symlink():
+        raise ValueError('installed Go SDK must be a protected directory')
+    for entry in sdk.rglob('*'):
+        protected(entry)
+        if entry.is_symlink() or not (entry.is_dir() or entry.is_file()):
+            raise ValueError('installed Go SDK contains links or special files')
+    version = (sdk / 'VERSION').read_text().splitlines()[0]
+    if version not in ('go1.26.8', 'go' + GO_REPAIR_VERSION):
+        raise ValueError('only the reviewed Go 1.26.8 to 1.26.9 repair is supported')
+    link = INSTALL / 'bin/go'
+    protected(link.parent)
+    if not link.is_symlink() or os.readlink(link) != '../go/bin/go':
+        raise ValueError('installed Go launcher must retain its expected SDK link')
+    if sdk.stat().st_dev != STATE.stat().st_dev:
+        raise ValueError('Go SDK and private backup must be on the same filesystem')
 
 
 def codex_package_payloads(directory):
@@ -43,7 +118,7 @@ def codex_package_payloads(directory):
     return payloads
 
 
-def update_coordinator(codex_package=None):
+def update_coordinator(codex_package=None, go_archive=None):
     """Explicit, narrow repair of a stopped installation; preserve auth and data."""
     protected(INSTALL / 'installation.json')
     protected(INSTALL / 'operator.json')
@@ -57,6 +132,12 @@ def update_coordinator(codex_package=None):
         protected(INSTALL / name)
         if digest(INSTALL / name) != expected:
             raise ValueError('installed files differ from their manifest; preserve and inspect them')
+    go_payload = None
+    if go_archive is not None:
+        go_payload = go_archive_payload(go_archive)
+        check_go_repair_installation()
+        if not GO_REPAIR_PATHS.issubset(inventory):
+            raise ValueError('Go repair requires the complete reviewed source inventory')
     changes = {}
     for name in inventory:
         safe_relative(name)
@@ -64,8 +145,17 @@ def update_coordinator(codex_package=None):
         if source.is_symlink() or not source.is_file() or not source.resolve().is_relative_to(ROOT):
             raise ValueError('unsafe source for coordinator repair')
         payload = source.read_bytes()
+        if go_payload is not None and name in GO_REPAIR_PATHS:
+            if payload != go_repair_bytes((INSTALL / name).read_bytes()):
+                raise ValueError('Go repair accepts only the exact reviewed pin substitutions')
+            if name == 'config/versions.lock.yml':
+                locked = __import__('yaml').safe_load(payload)['toolchains']['go']
+                if (locked['version'] != GO_REPAIR_VERSION or locked['sha256'] != GO_REPAIR_SHA256
+                        or locked['url'] != f'https://go.dev/dl/go{GO_REPAIR_VERSION}.linux-amd64.tar.gz'
+                        or locked['platform'] != 'linux-amd64'):
+                    raise ValueError('Go repair candidate does not pin the reviewed SDK')
         if hashlib.sha256(payload).hexdigest() != manifest['files'][name]:
-            if name not in COORDINATOR_UPDATE_PATHS:
+            if name not in COORDINATOR_UPDATE_PATHS and not (go_payload is not None and name in GO_REPAIR_PATHS):
                 raise ValueError('coordinator repair cannot change policy, dependencies, units or lab code')
             changes[name] = payload
     additions = {}
@@ -102,7 +192,7 @@ def update_coordinator(codex_package=None):
         state = store.read()
         if state.get('active'):
             raise ValueError('recover interrupted work before coordinator repair')
-        if not changes and not additions:
+        if not changes and not additions and go_payload is None:
             print('Coordinator source already matches; no files or state changed.')
             return
         parent = STATE / 'updates'
@@ -123,6 +213,13 @@ def update_coordinator(codex_package=None):
         operator.update({'commissioned': False, 'automatic_merge': False})
         atomic_json(INSTALL / 'operator.json', operator)
         print('Repair backup retained at ' + str(backup), flush=True)
+        if go_payload is not None:
+            staged = stage_go_archive(go_payload, backup / 'go-staging')
+            # Same-filesystem renames retain the old SDK. Failure stays paused;
+            # do not automatically resume or discard either recovery tree.
+            os.rename(INSTALL / 'go', backup / 'go-previous')
+            os.rename(staged, INSTALL / 'go')
+            manifest['go_archive'] = {'version': GO_REPAIR_VERSION, 'sha256': GO_REPAIR_SHA256}
         for name, payload in changes.items():
             target = INSTALL / name
             descriptor, temporary = tempfile.mkstemp(prefix='.coordinator-update-', dir=target.parent)
@@ -198,6 +295,8 @@ def main():
     parser.add_argument('--codex-package', type=Path,
                         help='explicitly restore missing companions from the pinned package during coordinator repair')
     parser.add_argument('--go-root', type=Path, help='existing pinned Go installation directory')
+    parser.add_argument('--go-archive', type=Path,
+                        help='explicit Go 1.26.8 to 1.26.9 security repair from the reviewed upstream archive')
     parser.add_argument('--adopt-existing-units', action='store_true',
                         help='reuse exact protected templates after disabling their timers; never overwrite custom units')
     parser.add_argument('--update-coordinator', action='store_true',
@@ -212,8 +311,10 @@ def main():
             return
         if os.geteuid() != 0:
             raise ValueError('--apply requires sudo; no password is read by this script')
-        update_coordinator(args.codex_package)
+        update_coordinator(args.codex_package, args.go_archive)
         return
+    if args.go_archive:
+        raise ValueError('--go-archive is only for --update-coordinator')
     if args.codex_package:
         raise ValueError('--codex-package is only for --update-coordinator; fresh installation uses --codex')
     print('Install fixed coordinator under /opt/srv6-mup-background; private state under /var/lib.')

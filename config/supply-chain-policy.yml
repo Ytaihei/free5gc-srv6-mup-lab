@@ -23,4 +23,4 @@ license_metadata:
   - {name: ansible-core, version: 2.21.3, licenses: [GPL-3.0-or-later], source: 'https://pypi.org/pypi/ansible-core/2.21.3/json'}
   - {name: Jinja2, version: 3.1.6, licenses: [BSD-3-Clause], source: 'https://github.com/pallets/jinja/blob/3.1.6/LICENSE.txt'}
   - {name: PyYAML, version: 6.0.3, licenses: [MIT], source: 'https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE'}
-  - {name: stdlib, version: v1.26.8, licenses: [BSD-3-Clause], source: 'https://github.com/golang/go/blob/go1.26.8/LICENSE'}
+  - {name: stdlib, version: v1.26.9, licenses: [BSD-3-Clause], source: 'https://github.com/golang/go/blob/go1.26.9/LICENSE'}

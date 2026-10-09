@@ -119,13 +119,36 @@ the actual isolated worker, without invoking a model, deploying or publishing.
 It uses a new retained worker-owned directory under the same work parent as
 development checkouts; its path is recorded in `result.json`.
 
-The `worker-tools` phase verifies the package and invokes the configured Codex
-model inside the same worker isolation, in that new scratch directory, for at
-most 180 seconds. It requires a private file containing a fresh challenge, not
+The `worker-tools` phase verifies the package, runs a fixed model-free sandbox
+probe (30 seconds maximum), then invokes the configured Codex model inside the
+same worker isolation, in that new scratch directory (180 seconds maximum for
+the model step). It requires a private file containing a fresh challenge, not
 just a successful process exit or the model's assertion of success. This uses
 the authenticated account's model allowance but does not inspect a development
 checkout, deploy, publish or merge. A missing helper, malformed/error event stream,
 or absent/wrong artifact prevents commissioning and leaves the queue paused.
+
+The sandbox probe runs `bwrap` with new user/network/PID namespaces, a read-only
+root, private proc/device mounts and the fixed command `/bin/true`. It selects
+the worker PATH's host `bwrap`, falling back to the verified bundled helper, and
+requires a root-owned protected executable. The new network namespace's loopback
+setup exercises `NETLINK_ROUTE` without changing the host network or invoking a
+model. Its private output is retained in `worker-sandbox.log`; a failure prevents
+the model step and is included in both live and retained diagnostic projections.
+Passing this smoke test does not replace the subsequent model/artifact checks.
+
+Only the worker's `RestrictAddressFamilies` includes `AF_NETLINK`, which
+[bubblewrap uses to configure loopback](https://github.com/containers/bubblewrap/blob/v0.9.0/network.c).
+Without it, the socket-family filter can cause `Address family not supported by protocol`
+even when AppArmor permits namespace creation. The fixed diagnostic hint is
+`sandbox-address-family-denied`. Checkers and publishers retain their existing
+socket-family list. Worker netlink access is a deliberate expansion of kernel API
+access, **not restricted to only one netlink protocol or only the child namespace
+by this setting**. No host capabilities are added: the empty capability bounding
+set, `NoNewPrivileges`, private-IP packet filters, filesystem protection and
+credential separation remain unchanged. No global AppArmor/user-namespace setting
+is disabled. Recommission the installed service before resuming; a user-service
+reproduction alone is not full worker or unattended-run acceptance.
 
 A worker failure with `200/CHDIR` can occur if that root-owned work parent was
 created as `0700` by the coordinator's `UMask=0077`, despite requesting `0755`
@@ -178,7 +201,8 @@ sudo python3 scripts/install-background-development.py --apply --update-coordina
 This narrow updater verifies all installed manifest hashes, accepts only the
 coordinator administrator/executor/installer, their tests, paired guide and
 translation hashes, and refuses source inventory changes. It cannot update the
-policy, units, dependencies, tool versions or lab code. It retains old files and manifests
+policy, units, dependencies, tool versions or lab code without the explicit,
+bounded repair options below. It retains old files and manifests
 under the private `updates/` directory, preserves accounts, credentials and task
 evidence, then leaves the queue paused and commissioning/automatic merging off.
 Run `commission` again before resuming. A partial update retains its backup and
@@ -198,6 +222,35 @@ or adopt untracked files from a partial repair. It records additions with the
 backup and writes the new installation manifest last. Timers/services must be
 stopped as above. Recommission before resuming; `--update-coordinator` without
 the package option does not silently install missing tools.
+
+For the reviewed Go 1.26.8 → 1.26.9 security update, obtain the official
+`go1.26.9.linux-amd64.tar.gz` archive as an ordinary user and pass its absolute
+path explicitly (with timers disabled and services stopped as above):
+
+```bash
+sudo python3 scripts/install-background-development.py --apply --update-coordinator \
+  --go-archive /absolute/path/to/go1.26.9.linux-amd64.tar.gz
+```
+
+The installer does not download or run a supplied executable as root. It accepts
+only the upstream archive SHA-256
+`42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d`,
+bounded plain archive members, and exact substitutions in the eight Go pin,
+license and fixture-provenance files. The general dependency/policy gate stays
+closed. The SDK and private backup directory must be on the same filesystem;
+the existing launcher must point to `../go/bin/go`. The old SDK is retained as
+`updates/<id>/go-previous`; repeated explicit repair is supported and also retains
+the previous SDK. Partial failures stay paused and require inspection, not an
+automatic retry or manifest edits. Authentication and existing run evidence are
+preserved. Recommission before any resume or single-run trial.
+
+Go 1.26.9 addresses [GO-2026-6609 (HTTP ranges)](https://pkg.go.dev/vuln/GO-2026-6609)
+and [GO-2026-6607 (TLS ECH)](https://pkg.go.dev/vuln/GO-2026-6607).
+The dashboard uses Go's file server; no application TLS/ECH server is configured
+here. Do not disable the upstream range limit with
+`GODEBUG=httpservecontentmaxranges=0`. Updating pins or the coordinator SDK does
+not rebuild already running lab binaries, guests or containers; those require
+separate rebuilding and deployment. Historical validation records remain unchanged.
 
 Worker and review stdout are retained as `worker.jsonl` and `review.jsonl`, with
 diagnostics separately in `worker.jsonl.stderr.log` and `review.jsonl.stderr.log`.
