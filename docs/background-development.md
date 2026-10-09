@@ -119,13 +119,36 @@ the actual isolated worker, without invoking a model, deploying or publishing.
 It uses a new retained worker-owned directory under the same work parent as
 development checkouts; its path is recorded in `result.json`.
 
-The `worker-tools` phase verifies the package and invokes the configured Codex
-model inside the same worker isolation, in that new scratch directory, for at
-most 180 seconds. It requires a private file containing a fresh challenge, not
+The `worker-tools` phase verifies the package, runs a fixed model-free sandbox
+probe (30 seconds maximum), then invokes the configured Codex model inside the
+same worker isolation, in that new scratch directory (180 seconds maximum for
+the model step). It requires a private file containing a fresh challenge, not
 just a successful process exit or the model's assertion of success. This uses
 the authenticated account's model allowance but does not inspect a development
 checkout, deploy, publish or merge. A missing helper, malformed/error event stream,
 or absent/wrong artifact prevents commissioning and leaves the queue paused.
+
+The sandbox probe runs `bwrap` with new user/network/PID namespaces, a read-only
+root, private proc/device mounts and the fixed command `/bin/true`. It selects
+the worker PATH's host `bwrap`, falling back to the verified bundled helper, and
+requires a root-owned protected executable. The new network namespace's loopback
+setup exercises `NETLINK_ROUTE` without changing the host network or invoking a
+model. Its private output is retained in `worker-sandbox.log`; a failure prevents
+the model step and is included in both live and retained diagnostic projections.
+Passing this smoke test does not replace the subsequent model/artifact checks.
+
+Only the worker's `RestrictAddressFamilies` includes `AF_NETLINK`, which
+[bubblewrap uses to configure loopback](https://github.com/containers/bubblewrap/blob/v0.9.0/network.c).
+Without it, the socket-family filter can cause `Address family not supported by protocol`
+even when AppArmor permits namespace creation. The fixed diagnostic hint is
+`sandbox-address-family-denied`. Checkers and publishers retain their existing
+socket-family list. Worker netlink access is a deliberate expansion of kernel API
+access, **not restricted to only one netlink protocol or only the child namespace
+by this setting**. No host capabilities are added: the empty capability bounding
+set, `NoNewPrivileges`, private-IP packet filters, filesystem protection and
+credential separation remain unchanged. No global AppArmor/user-namespace setting
+is disabled. Recommission the installed service before resuming; a user-service
+reproduction alone is not full worker or unattended-run acceptance.
 
 A worker failure with `200/CHDIR` can occur if that root-owned work parent was
 created as `0700` by the coordinator's `UMask=0077`, despite requesting `0755`

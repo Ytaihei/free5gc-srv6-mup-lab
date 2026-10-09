@@ -50,7 +50,7 @@ LOG_SIGNALS = {
     'loopback': ('loopback',),
     'netlink-address': ('rtm_newaddr',),
     'netlink-link': ('rtm_newlink',),
-    'netlink-socket': ('af_netlink', 'netlink socket'),
+    'netlink-socket': ('af_netlink', 'netlink socket', 'netlink_route socket'),
     'unsupported-address-family': ('address family not supported',),
     'network-namespace': ('network namespace', 'netns'),
     'capability': ('setpcap', 'capset', 'capabilities'),
@@ -74,6 +74,7 @@ DIAGNOSTIC_ACTIONS = {
     'none': 'no-action', 'in-progress': 'wait-or-check-service',
     'tool-host-missing': 'operator-check-pinned-package',
     'sandbox-denied': 'operator-inspect-isolation-do-not-disable',
+    'sandbox-address-family-denied': 'operator-inspect-isolation-do-not-disable',
     'tool-execution-error': 'operator-inspect-private-worker-evidence',
     'invalid-worker-events': 'operator-inspect-private-worker-evidence',
     'artifact-unverified': 'operator-inspect-tool-probe',
@@ -89,6 +90,8 @@ DIAGNOSTIC_ACTIONS = {
 def diagnostic_hint(phase, error=None, evidence=''):
     """Heuristic only. Never return messages, matches, paths or generated prose."""
     text = evidence.lower()
+    if 'bwrap' in text and 'address family not supported' in text:
+        return 'sandbox-address-family-denied'
     if 'codex-code-mode-host' in text and ('not found' in text or 'no such file' in text):
         return 'tool-host-missing'
     if any(word in text for word in ('bwrap', 'sandbox', 'namespace')) and any(
@@ -431,7 +434,9 @@ def service(role, argv, *, cwd=None, seconds=120, input_text=None, output_file=N
         'MemoryMax': '6G', 'MemorySwapMax': '0', 'TasksMax': '512',
         'Nice': '10', 'IOSchedulingClass': 'idle', 'KillMode': 'control-group',
         'RuntimeMaxSec': str(max(1, int(seconds))), 'TimeoutStopSec': '15',
-        'RestrictAddressFamilies': 'AF_UNIX AF_INET AF_INET6',
+        # bwrap needs NETLINK_ROUTE to configure lo inside its new network
+        # namespace. Do not grant host capabilities or broaden the other roles.
+        'RestrictAddressFamilies': 'AF_UNIX AF_INET AF_INET6' + (' AF_NETLINK' if role == 'worker' else ''),
         'IPAddressDeny': PRIVATE_NETS,
         'IPAddressAllow': '127.0.0.53/32',  # Ubuntu's DNS stub, not the host/lab networks.
         'ReadWritePaths': str(home),

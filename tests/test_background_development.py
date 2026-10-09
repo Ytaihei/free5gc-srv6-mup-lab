@@ -95,6 +95,8 @@ class SafeDiagnosticTests(unittest.TestCase):
 
     def test_classifier_returns_only_known_hints(self):
         cases = [('codex-code-mode-host: No such file', None, 'tool-host-missing'),
+                 ('bwrap: loopback: Failed to create NETLINK_ROUTE socket: Address family not supported by protocol',
+                  ValueError('failed'), 'sandbox-address-family-denied'),
                  ('sandbox: Permission denied', None, 'sandbox-denied'),
                  ('{"type": "error", "message": "private"}', None, 'tool-execution-error'),
                  ('', executor.WorkerExecutionError('incomplete event private'), 'invalid-worker-events'),
@@ -318,11 +320,15 @@ class OperatorLogTests(unittest.TestCase):
         directory.mkdir(parents=True)
         bg.atomic_json(directory / 'result.json', {'complete': False, 'phases': {'worker-tools': 'failed'}})
         bg.atomic_json(directory / 'worker-tools.jsonl', {'message': 'bwrap: mount: Permission denied PRIVATE_SECRET'})
+        bg.atomic_json(directory / 'worker-sandbox.log', {
+            'message': 'bwrap: loopback: Failed to create NETLINK_ROUTE socket: Address family not supported by protocol'})
         before = {p.name: p.read_bytes() for p in directory.iterdir()}
         admin.export_commissioning_diagnostic('b' * 32)
         event = executor.read_operator_logs()['events'][0]
         self.assertEqual(event['record']['source'], 'retained')
-        self.assertEqual(event['signals'], ['bwrap', 'mount', 'permission-denied'])
+        self.assertEqual(event['signals'], ['bwrap', 'loopback', 'mount', 'netlink-socket',
+                                            'permission-denied', 'unsupported-address-family'])
+        self.assertEqual(event['record']['classification_hint'], 'sandbox-address-family-denied')
         self.assertEqual(before, {p.name: p.read_bytes() for p in directory.iterdir()})
 
     def test_logs_cli_needs_neither_root_nor_external_tools(self):
@@ -738,7 +744,7 @@ class CommissioningTests(unittest.TestCase):
     def test_every_phase_has_retained_evidence_and_success_remains_paused(self):
         with patch.object(admin, 'service', side_effect=self.service) as service:
             admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
-        self.assertEqual(service.call_count, 6)
+        self.assertEqual(service.call_count, 7)
         report = next((self.store.directory / 'commissioning').glob('*/result.json'))
         self.assertTrue(json.loads(report.read_text())['complete'])
         self.assertEqual(json.loads(report.read_text())['phases']['worker-tools'], 'passed')
@@ -749,7 +755,14 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(service.call_args.args[1], ['make', 'check'])
         self.assertEqual(source_tree.parent, self.install / 'candidates')
         self.assertFalse((source_tree / 'operator.json').exists())
-        self.assertEqual(len(list(report.parent.glob('*.log'))), 5)
+        self.assertEqual(len(list(report.parent.glob('*.log'))), 6)
+        sandbox = service.call_args_list[4]
+        self.assertEqual(sandbox.args[0], 'worker')
+        self.assertEqual(sandbox.args[1][1:], ['--unshare-user', '--unshare-net', '--unshare-pid',
+                                              '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--', '/bin/true'])
+        self.assertEqual(sandbox.kwargs['seconds'], 30)
+        self.assertEqual(sandbox.kwargs['output_file'], report.parent / 'worker-sandbox.log')
+        self.assertIn('exec', service.call_args_list[5].args[1])
         workspace = Path(json.loads(report.read_text())['worker_workspace'])
         self.assertEqual(workspace.parent, self.worker / 'work')
         self.assertEqual(workspace.stat().st_mode & 0o777, 0o700)
@@ -815,7 +828,7 @@ class CommissioningTests(unittest.TestCase):
         with patch.object(admin, 'service', side_effect=self.service) as service:
             with self.assertRaisesRegex(ValueError, 'source-checks failed; inspect private log'):
                 admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
-        self.assertEqual(service.call_count, 5)
+        self.assertEqual(service.call_count, 6)
         report = next((self.store.directory / 'commissioning').glob('*/result.json'))
         result = json.loads(report.read_text())
         self.assertEqual(result['phases']['source-checks'], 'failed')
@@ -864,6 +877,23 @@ class CommissioningTests(unittest.TestCase):
                 admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
         self.assertEqual(service.call_count, 4)
         self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+
+    def test_sandbox_failure_prevents_model_call_and_exports_probe_evidence(self):
+        def fail(role, command, **kwargs):
+            self.service(role, command, **kwargs)
+            if '--unshare-net' in command:
+                raise ValueError('sandbox probe failed')
+        with patch.object(admin, 'service', side_effect=fail) as service, \
+                patch.object(admin, 'emit_diagnostic') as emit:
+            with self.assertRaisesRegex(ValueError, 'worker-tools failed'):
+                admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
+        self.assertEqual(service.call_count, 5)
+        self.assertFalse(any('exec' in call.args[1] for call in service.call_args_list))
+        report = next((self.store.directory / 'commissioning').glob('*/result.json'))
+        self.assertIn(report.parent / 'worker-sandbox.log', emit.call_args.kwargs['logs'])
+        self.assertEqual(json.loads(report.read_text())['phases']['worker-tools'], 'failed')
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+        self.assertTrue(self.store.read()['paused'])
 
     def test_tool_probe_refuses_wrong_contents_and_symlinks(self):
         workspace = self.worker / 'probe'
@@ -1555,6 +1585,25 @@ class WorkerEventTests(unittest.TestCase):
     EVENTS = [{'type': 'thread.started', 'thread_id': 'fixture'}, {'type': 'turn.started'},
               {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'Done'}},
               {'type': 'turn.completed', 'usage': {}}]
+
+    def test_netlink_is_worker_only_without_relaxing_other_boundaries(self):
+        for role in ('worker', 'checks', 'publisher'):
+            with self.subTest(role=role), patch.object(executor.subprocess, 'run',
+                    return_value=SimpleNamespace(returncode=0, stdout='')) as run:
+                executor.service(role, ['/bin/true'])
+            command = run.call_args_list[0].args[0]
+            properties = dict(command[i + 1].split('=', 1) for i, value in enumerate(command)
+                              if value == '--property')
+            families = 'AF_UNIX AF_INET AF_INET6' + (' AF_NETLINK' if role == 'worker' else '')
+            self.assertEqual(properties['RestrictAddressFamilies'], families)
+            self.assertEqual(properties['CapabilityBoundingSet'], '')
+            self.assertEqual(properties['NoNewPrivileges'], 'yes')
+            self.assertEqual(properties['IPAddressDeny'], executor.PRIVATE_NETS)
+            self.assertEqual(properties['IPAddressAllow'], '127.0.0.53/32')
+            self.assertEqual(properties['ProtectSystem'], 'strict')
+            self.assertIn('-/run/docker.sock', properties['InaccessiblePaths'])
+            self.assertIn('-/var/lib/srv6-mup-background', properties['InaccessiblePaths'])
+            self.assertEqual(properties['User'], executor.ACCOUNTS[role])
 
     def test_strict_events_reject_errors_even_with_turn_completed(self):
         with tempfile.TemporaryDirectory() as root:
