@@ -759,8 +759,8 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(len(list(report.parent.glob('*.log'))), 6)
         sandbox = service.call_args_list[4]
         self.assertEqual(sandbox.args[0], 'worker')
-        self.assertEqual(sandbox.args[1][1:], ['--unshare-user', '--unshare-net', '--unshare-pid',
-                                              '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--', '/bin/true'])
+        self.assertEqual(sandbox.args[1], [self.install / 'venv/bin/python3',
+                                         self.install / 'scripts/background-admin.py', 'probe-sandbox'])
         self.assertEqual(sandbox.kwargs['seconds'], 30)
         self.assertEqual(sandbox.kwargs['output_file'], report.parent / 'worker-sandbox.log')
         self.assertIn('exec', service.call_args_list[5].args[1])
@@ -882,11 +882,11 @@ class CommissioningTests(unittest.TestCase):
     def test_sandbox_failure_prevents_model_call_and_exports_probe_evidence(self):
         def fail(role, command, **kwargs):
             self.service(role, command, **kwargs)
-            if '--unshare-net' in command:
+            if 'probe-sandbox' in command:
                 raise ValueError('sandbox probe failed')
         with patch.object(admin, 'service', side_effect=fail) as service, \
                 patch.object(admin, 'emit_diagnostic') as emit:
-            with self.assertRaisesRegex(ValueError, 'worker-tools failed'):
+            with self.assertRaisesRegex(ValueError, r'worker-tools failed; inspect private log .*worker-sandbox\.log'):
                 admin.commission(self.store, self.state, 'Example', 'example@example.invalid')
         self.assertEqual(service.call_count, 5)
         self.assertFalse(any('exec' in call.args[1] for call in service.call_args_list))
@@ -895,6 +895,36 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(json.loads(report.read_text())['phases']['worker-tools'], 'failed')
         self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
         self.assertTrue(self.store.read()['paused'])
+
+    def test_sandbox_probe_uses_pinned_helper_with_explicit_restricted_profile(self):
+        with patch.object(admin.os, 'geteuid', return_value=1000), patch.object(admin.os, 'execv') as execute:
+            admin.sandbox_probe()
+        binary, argv = execute.call_args.args
+        self.assertEqual(binary, str(self.install / 'bin/codex'))
+        self.assertEqual(argv[0], 'codex-linux-sandbox')
+        self.assertEqual(argv[-2:], ['--', '/bin/true'])
+        self.assertEqual(argv[argv.index('--sandbox-policy-cwd') + 1], str(Path.cwd()))
+        self.assertEqual(argv[argv.index('--command-cwd') + 1], str(Path.cwd()))
+        profile = json.loads(argv[argv.index('--permission-profile') + 1])
+        self.assertEqual(profile, {
+            'type': 'managed', 'network': 'restricted',
+            'file_system': {'type': 'restricted', 'entries': [
+                {'path': {'type': 'special', 'value': {'kind': 'root'}}, 'access': 'read'},
+                {'path': {'type': 'path', 'path': str(Path.cwd())}, 'access': 'write'},
+            ]},
+        })
+        self.assertNotIn('--no-proc', argv)
+        self.assertNotIn('--use-legacy-landlock', argv)
+
+    def test_sandbox_probe_refuses_root_and_does_not_hide_exec_failure(self):
+        with patch.object(admin.os, 'geteuid', return_value=0), patch.object(admin.os, 'execv') as execute:
+            with self.assertRaisesRegex(ValueError, 'unprivileged'):
+                admin.sandbox_probe()
+            execute.assert_not_called()
+        with patch.object(admin.os, 'geteuid', return_value=1000), \
+                patch.object(admin.os, 'execv', side_effect=OSError('helper unavailable')):
+            with self.assertRaisesRegex(OSError, 'helper unavailable'):
+                admin.sandbox_probe()
 
     def test_tool_probe_refuses_wrong_contents_and_symlinks(self):
         workspace = self.worker / 'probe'

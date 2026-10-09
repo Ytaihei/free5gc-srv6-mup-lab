@@ -128,14 +128,30 @@ the authenticated account's model allowance but does not inspect a development
 checkout, deploy, publish or merge. A missing helper, malformed/error event stream,
 or absent/wrong artifact prevents commissioning and leaves the queue paused.
 
-The sandbox probe runs `bwrap` with new user/network/PID namespaces, a read-only
-root, private proc/device mounts and the fixed command `/bin/true`. It selects
-the worker PATH's host `bwrap`, falling back to the verified bundled helper, and
-requires a root-owned protected executable. The new network namespace's loopback
-setup exercises `NETLINK_ROUTE` without changing the host network or invoking a
-model. Its private output is retained in `worker-sandbox.log`; a failure prevents
-the model step and is included in both live and retained diagnostic projections.
-Passing this smoke test does not replace the subsequent model/artifact checks.
+The sandbox probe uses the verified Codex 0.154.0 binary's internal
+`codex-linux-sandbox` entry point, selected by `argv[0]`. This version-specific
+contract must be checked again before changing the package pin. It runs only
+`/bin/true`, with an explicit managed profile: read-only root, writable scratch
+directory and restricted network. No user configuration, authentication or model
+is loaded by this helper. It refuses root execution. The worker PATH's host
+`bwrap` (or pinned bundled fallback) must be a root-owned protected executable.
+The private output is retained in `worker-sandbox.log`; failure names this log,
+prevents the model step and is included in live and retained diagnostics.
+Passing this smoke test does not replace model/artifact or isolation checks.
+
+A direct `bwrap --proc /proc` probe can fail with `Operation not permitted` and
+the kernel message `VFS: Mount too revealing` when the parent service protects
+parts of `/proc`. It is not equivalent to the actual Codex execution path:
+the pinned helper detects recognized proc-mount failures and retries its sandbox
+without a fresh proc mount. The probe now uses that same path rather than
+requiring a fresh mount that Codex itself does not require. User/PID/network
+namespaces, filesystem policy and seccomp remain enforced; the inherited `/proc`
+view is **not** a fresh procfs for the child PID namespace. This is the existing
+upstream compatibility behavior, not a new equivalent-procfs claim or an
+unsandboxed retry. `ProtectKernelTunables`, capability bounds, AppArmor and all
+other service restrictions are unchanged. Installed worker commissioning is
+still required; a local helper test does not attest that environment. See the
+[official sandbox overview](https://learn.chatgpt.com/docs/permissions).
 
 Only the worker's `RestrictAddressFamilies` includes `AF_NETLINK`, which
 [bubblewrap uses to configure loopback](https://github.com/containers/bubblewrap/blob/v0.9.0/network.c).

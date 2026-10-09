@@ -144,6 +144,29 @@ def workspace_probe():
             key for key, passed in checks.items() if not passed))
 
 
+def sandbox_probe():
+    """Run the pinned Linux helper, without config, credentials or a model."""
+    if os.geteuid() == 0:
+        raise ValueError('sandbox probe must run unprivileged')
+    workspace = str(Path.cwd())
+    profile = {
+        'type': 'managed',
+        'file_system': {'type': 'restricted', 'entries': [
+            {'path': {'type': 'special', 'value': {'kind': 'root'}}, 'access': 'read'},
+            {'path': {'type': 'path', 'path': workspace}, 'access': 'write'},
+        ]},
+        'network': 'restricted',
+    }
+    # argv[0] selects the internal helper in the hash-pinned 0.154.0 binary.
+    # Let that helper handle a denied fresh proc mount just as it does during
+    # model execution. Never substitute a bare command or disable sandboxing.
+    os.execv(str(INSTALL / 'bin/codex'), [
+        'codex-linux-sandbox', '--sandbox-policy-cwd', workspace,
+        '--command-cwd', workspace, '--permission-profile', json.dumps(profile),
+        '--', '/bin/true',
+    ])
+
+
 def commissioning_tools(workspace, evidence, model):
     """Exercise the actual configured model/tool path, not just --version/login."""
     verify_codex_bundle()
@@ -152,8 +175,8 @@ def commissioning_tools(workspace, evidence, model):
     path = str(INSTALL / 'venv/bin') + ':' + str(INSTALL / 'bin') + ':/usr/bin:/bin'
     bwrap = Path(shutil.which('bwrap', path=path) or INSTALL / 'codex-resources/bwrap').resolve()
     protected(bwrap, executable=True)
-    service('worker', [bwrap, '--unshare-user', '--unshare-net', '--unshare-pid',
-                       '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--', '/bin/true'],
+    service('worker', [INSTALL / 'venv/bin/python3', INSTALL / 'scripts/background-admin.py',
+                       'probe-sandbox'],
             cwd=workspace, seconds=30, output_file=evidence / 'worker-sandbox.log')
     challenge = uuid.uuid4().hex
     probe = workspace / 'tool-probe.txt'
@@ -321,6 +344,8 @@ def commission(store, state, author_name, author_email):
             else:
                 service(role, command, cwd=cwd, seconds=seconds, output_file=log)
         except (ValueError, OSError, subprocess.SubprocessError) as error:
+            if name == 'worker-tools' and not log.exists() and (evidence / 'worker-sandbox.log').exists():
+                log = evidence / 'worker-sandbox.log'
             if not log.exists():
                 atomic_json(log, {'error': str(error)})
             result['phases'][name] = 'failed'
@@ -358,6 +383,7 @@ def main():
     sub.add_parser('_execute-test-once', help=argparse.SUPPRESS)
     sub.add_parser('probe-isolation', help='read-only probe for the isolated checks account')
     sub.add_parser('probe-workspace', help='scratch I/O probe for the isolated worker account')
+    sub.add_parser('probe-sandbox', help='fixed model-free probe for the isolated worker account')
     commission_parser = sub.add_parser('commission')
     commission_parser.add_argument('--author-name', required=True)
     commission_parser.add_argument('--author-email', required=True)
@@ -378,6 +404,9 @@ def main():
         return
     if args.action == 'probe-workspace':
         workspace_probe()
+        return
+    if args.action == 'probe-sandbox':
+        sandbox_probe()
         return
     if ROOT != INSTALL or os.geteuid() != 0:
         raise ValueError('only the root-owned installed administration tool can perform this operation')
