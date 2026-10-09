@@ -44,8 +44,8 @@ host_networks:
 # third_party/vinbero compatibility patch (4.8.0). See research-scope.md.
 gobgp_version: '4.8.0'
 vpp_version: '26.06-release'
-go_version: '1.26.8'
-go_linux_amd64_sha256: 'd0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b'
+go_version: '1.26.9'
+go_linux_amd64_sha256: '42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d'
 vinbero_version: 'v0.1.1'
 vinbero_commit: '0d7ccf3c798fffa000ccee82e1fd8c9d86525099'
 free5gc_compose_version: 'v4.2.3'

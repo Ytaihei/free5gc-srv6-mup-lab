@@ -72,7 +72,7 @@ file SHA-256 values, not just filenames or regex snippets:
   committed defaults in [the pinned Compose certificate tree](https://github.com/free5gc/free5gc-compose/tree/e4e2acebad6d6a8c49cfb03a97d9a09dd40c55c7/cert).
   The [upstream NRF image recipe](https://github.com/free5gc/free5gc-compose/blob/e4e2acebad6d6a8c49cfb03a97d9a09dd40c55c7/nf_nrf/Dockerfile)
   explicitly copies a default key into the image.
-- The Go SDK match is used by [the platform-verifier test](https://github.com/golang/go/blob/go1.26.8/src/crypto/x509/platform_test.go),
+- The Go SDK match is used by [the platform-verifier test](https://github.com/golang/go/blob/go1.26.9/src/crypto/x509/platform_test.go),
   not an operator credential.
 
 [public-test-keys.json](../config/public-test-keys.json) records paths, hashes

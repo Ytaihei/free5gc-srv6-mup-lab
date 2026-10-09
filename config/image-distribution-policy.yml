@@ -33,7 +33,7 @@ license_groups:
 # custom identifiers and absent metadata need exact package/file text review.
 # Do not normalize them to a more convenient license automatically.
 license_metadata:
-  - {name: stdlib, version: v1.26.8, licenses: [BSD-3-Clause], source: 'https://github.com/golang/go/blob/go1.26.8/LICENSE'}
+  - {name: stdlib, version: v1.26.9, licenses: [BSD-3-Clause], source: 'https://github.com/golang/go/blob/go1.26.9/LICENSE'}
   - {name: github.com/fclairamb/afero-snd, version: v0.1.1-0.20220917220349-7844d753b751, licenses: [MIT], source: 'https://github.com/fclairamb/afero-snd/blob/7844d753b751c069164261a0b0105561a348d80f/LICENSE'}
 required_artifact_materials:
   - immutable-image-and-layer-digests

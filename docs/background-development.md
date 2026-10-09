@@ -201,7 +201,8 @@ sudo python3 scripts/install-background-development.py --apply --update-coordina
 This narrow updater verifies all installed manifest hashes, accepts only the
 coordinator administrator/executor/installer, their tests, paired guide and
 translation hashes, and refuses source inventory changes. It cannot update the
-policy, units, dependencies, tool versions or lab code. It retains old files and manifests
+policy, units, dependencies, tool versions or lab code without the explicit,
+bounded repair options below. It retains old files and manifests
 under the private `updates/` directory, preserves accounts, credentials and task
 evidence, then leaves the queue paused and commissioning/automatic merging off.
 Run `commission` again before resuming. A partial update retains its backup and
@@ -221,6 +222,35 @@ or adopt untracked files from a partial repair. It records additions with the
 backup and writes the new installation manifest last. Timers/services must be
 stopped as above. Recommission before resuming; `--update-coordinator` without
 the package option does not silently install missing tools.
+
+For the reviewed Go 1.26.8 → 1.26.9 security update, obtain the official
+`go1.26.9.linux-amd64.tar.gz` archive as an ordinary user and pass its absolute
+path explicitly (with timers disabled and services stopped as above):
+
+```bash
+sudo python3 scripts/install-background-development.py --apply --update-coordinator \
+  --go-archive /absolute/path/to/go1.26.9.linux-amd64.tar.gz
+```
+
+The installer does not download or run a supplied executable as root. It accepts
+only the upstream archive SHA-256
+`42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d`,
+bounded plain archive members, and exact substitutions in the eight Go pin,
+license and fixture-provenance files. The general dependency/policy gate stays
+closed. The SDK and private backup directory must be on the same filesystem;
+the existing launcher must point to `../go/bin/go`. The old SDK is retained as
+`updates/<id>/go-previous`; repeated explicit repair is supported and also retains
+the previous SDK. Partial failures stay paused and require inspection, not an
+automatic retry or manifest edits. Authentication and existing run evidence are
+preserved. Recommission before any resume or single-run trial.
+
+Go 1.26.9 addresses [GO-2026-6609 (HTTP ranges)](https://pkg.go.dev/vuln/GO-2026-6609)
+and [GO-2026-6607 (TLS ECH)](https://pkg.go.dev/vuln/GO-2026-6607).
+The dashboard uses Go's file server; no application TLS/ECH server is configured
+here. Do not disable the upstream range limit with
+`GODEBUG=httpservecontentmaxranges=0`. Updating pins or the coordinator SDK does
+not rebuild already running lab binaries, guests or containers; those require
+separate rebuilding and deployment. Historical validation records remain unchanged.
 
 Worker and review stdout are retained as `worker.jsonl` and `review.jsonl`, with
 diagnostics separately in `worker.jsonl.stderr.log` and `review.jsonl.stderr.log`.

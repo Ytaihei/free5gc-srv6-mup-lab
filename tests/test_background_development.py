@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import subprocess
 import socket
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -1206,6 +1207,137 @@ class CoordinatorUpdateTests(unittest.TestCase):
         self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
         self.assertTrue(list((self.store.directory / 'updates').glob('*/installation.json')))
         self.assertTrue(self.store.read()['paused'])
+
+    def go_fixture(self):
+        for name in sorted(installer.GO_REPAIR_PATHS):
+            if name == 'config/versions.lock.yml':
+                payload = ('toolchains:\n  go:\n    version: 1.26.8\n    platform: linux-amd64\n'
+                           '    url: https://go.dev/dl/go1.26.8.linux-amd64.tar.gz\n'
+                           f'    sha256: {installer.GO_PREVIOUS_SHA256}\n').encode()
+            else:
+                payload = b'fixture 1.26.8\n'
+            for directory in (self.install, self.source):
+                path = directory / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload if directory == self.install else installer.go_repair_bytes(payload))
+            self.files.append(name)
+        for directory in (self.install, self.source):
+            (directory / 'config/public-source.json').write_text(json.dumps({'files': self.files}))
+        manifest = json.loads((self.install / 'installation.json').read_text())
+        manifest['files'].update({name: bg.digest(self.install / name) for name in self.files})
+        bg.atomic_json(self.install / 'installation.json', manifest)
+        (self.install / 'go/bin').mkdir(parents=True)
+        (self.install / 'go/VERSION').write_text('go1.26.8\n')
+        (self.install / 'go/bin/go').write_text('old SDK; never executed')
+        (self.install / 'bin/go').symlink_to('../go/bin/go')
+        archive = self.root / 'go.tar.gz'
+        with tarfile.open(archive, 'w:gz') as output:
+            for name, data in [('go/VERSION', b'go1.26.9\n'), ('go/bin/go', b'new SDK; never executed')]:
+                member = tarfile.TarInfo(name)
+                member.size, member.mode = len(data), 0o755 if name.endswith('/go') else 0o644
+                output.addfile(member, io.BytesIO(data))
+        # Pin validation is tested separately. Keep the production hash in the
+        # source fixture; replace only the archive reader for lifecycle tests.
+        return archive
+
+    def test_explicit_go_repair_preserves_sdk_and_recommission_gate(self):
+        archive = self.go_fixture()
+        with patch.object(installer, 'go_archive_payload', return_value=archive.read_bytes()), \
+                patch.object(installer.subprocess, 'run') as run:
+            installer.update_coordinator(go_archive=archive)
+            run.assert_not_called()
+        self.assertEqual((self.install / 'go/VERSION').read_text(), 'go1.26.9\n')
+        self.assertEqual(os.readlink(self.install / 'bin/go'), '../go/bin/go')
+        backup = next((self.store.directory / 'updates').glob('*/go-previous'))
+        self.assertEqual((backup / 'VERSION').read_text(), 'go1.26.8\n')
+        manifest = json.loads((self.install / 'installation.json').read_text())
+        self.assertEqual(manifest['go_archive']['sha256'], installer.GO_REPAIR_SHA256)
+        for name, expected in manifest['files'].items():
+            self.assertEqual(bg.digest(self.install / name), expected)
+        self.assertTrue(self.store.read()['paused'])
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+        with patch.object(installer, 'go_archive_payload', return_value=archive.read_bytes()):
+            installer.update_coordinator(go_archive=archive)
+        self.assertEqual(len(list((self.store.directory / 'updates').glob('*/go-previous'))), 2)
+
+    def test_go_pin_changes_still_require_explicit_archive(self):
+        self.go_fixture()
+        with self.assertRaisesRegex(ValueError, 'cannot change policy'):
+            installer.update_coordinator()
+        self.assertFalse((self.store.directory / 'updates').exists())
+
+    def test_go_repair_rejects_nonmechanical_and_unrelated_policy_changes(self):
+        archive = self.go_fixture()
+        for name in ['config/supply-chain-policy.yml', 'config/background-development.yml']:
+            with self.subTest(name=name):
+                path = self.source / name
+                original = path.read_bytes()
+                path.write_bytes(original + b'changed policy\n')
+                with patch.object(installer, 'go_archive_payload', return_value=archive.read_bytes()):
+                    with self.assertRaisesRegex(ValueError, 'exact reviewed|cannot change policy'):
+                        installer.update_coordinator(go_archive=archive)
+                path.write_bytes(original)
+        self.assertFalse((self.store.directory / 'updates').exists())
+
+    def test_go_archive_wrong_digest_and_symlink_refused(self):
+        archive = self.go_fixture()
+        with self.assertRaisesRegex(ValueError, 'upstream SHA-256'):
+            installer.update_coordinator(go_archive=archive)
+        link = self.root / 'linked.tar.gz'
+        link.symlink_to(archive)
+        with self.assertRaises(OSError):
+            installer.go_archive_payload(link)
+        self.assertFalse((self.store.directory / 'updates').exists())
+
+    def test_go_archive_verified_bytes_are_returned_without_execution(self):
+        archive = self.go_fixture()
+        with patch.object(installer, 'GO_REPAIR_SHA256', bg.digest(archive)), \
+                patch.object(installer.subprocess, 'run') as run:
+            self.assertEqual(installer.go_archive_payload(archive), archive.read_bytes())
+            run.assert_not_called()
+
+    def test_go_archive_rejects_traversal_links_duplicates_and_special_members(self):
+        cases = [('go/../escape', tarfile.REGTYPE), ('go/link', tarfile.SYMTYPE),
+                 ('go/hardlink', tarfile.LNKTYPE), ('go/device', tarfile.CHRTYPE),
+                 ('other/file', tarfile.REGTYPE), ('go/duplicate', tarfile.REGTYPE)]
+        for index, (name, kind) in enumerate(cases):
+            with self.subTest(name=name):
+                stream = io.BytesIO()
+                with tarfile.open(fileobj=stream, mode='w:gz') as archive:
+                    member = tarfile.TarInfo(name)
+                    member.type, member.linkname = kind, '/outside'
+                    archive.addfile(member)
+                    if name == 'go/duplicate':
+                        archive.addfile(member)
+                with self.assertRaises(ValueError):
+                    installer.stage_go_archive(stream.getvalue(), self.root / f'stage-{index}')
+
+    def test_go_repair_rejects_unexpected_launcher(self):
+        archive = self.go_fixture()
+        (self.install / 'bin/go').unlink()
+        (self.install / 'bin/go').symlink_to('/other/go')
+        with patch.object(installer, 'go_archive_payload', return_value=archive.read_bytes()):
+            with self.assertRaisesRegex(ValueError, 'expected SDK link'):
+                installer.update_coordinator(go_archive=archive)
+        self.assertFalse((self.store.directory / 'updates').exists())
+
+    def test_go_swap_failure_retains_old_sdk_manifest_and_paused_state(self):
+        archive = self.go_fixture()
+        original_manifest = (self.install / 'installation.json').read_bytes()
+        rename = os.rename
+        def fail(source, destination):
+            if Path(destination) == self.install / 'go':
+                raise OSError('simulated SDK swap failure')
+            return rename(source, destination)
+        with patch.object(installer, 'go_archive_payload', return_value=archive.read_bytes()), \
+                patch.object(installer.os, 'rename', side_effect=fail):
+            with self.assertRaisesRegex(OSError, 'SDK swap failure'):
+                installer.update_coordinator(go_archive=archive)
+        self.assertEqual((self.install / 'installation.json').read_bytes(), original_manifest)
+        self.assertTrue(list((self.store.directory / 'updates').glob('*/go-previous/VERSION')))
+        self.assertTrue(list((self.store.directory / 'updates').glob('*/go-staging/go/VERSION')))
+        self.assertTrue(self.store.read()['paused'])
+        self.assertFalse(json.loads((self.install / 'operator.json').read_text())['commissioned'])
 
 
 class InstallationTests(unittest.TestCase):

@@ -188,7 +188,8 @@ sudo python3 scripts/install-background-development.py --apply --update-coordina
 
 この限定更新は導入済みマニフェストの全ハッシュを検証し、管理・実行・導入スクリプト、
 その試験、日英の手順書と翻訳ハッシュだけを受け入れます。公開一覧の変更は拒否し、
-ポリシー、unit、依存、ツールの版、ラボコードは更新しません。旧ファイルとマニフェストを
+下記の明示的・限定的な修復オプションなしに、ポリシー、unit、依存、ツールの版、ラボコードは
+更新しません。旧ファイルとマニフェストを
 非公開の`updates/`配下へ保持し、アカウント・認証・タスクの証跡を維持したまま、
 台帳を停止し、導入確認・自動マージを無効にします。再開前に`commission`を再実行
 してください。更新が途中で止まった場合もバックアップを保持し、検証を通過できなく
@@ -207,6 +208,33 @@ sudo python3 scripts/install-background-development.py --apply --update-coordina
 引取りは行いません。追加一覧をバックアップとともに記録し、最後に導入マニフェストを更新
 します。上記同様にtimer・サービスを停止してから実行し、再開前に導入確認を行ってください。
 パッケージ指定なしの`--update-coordinator`が不足ツールを暗黙に導入することはありません。
+
+レビュー済みのGo 1.26.8 → 1.26.9セキュリティ更新では、一般ユーザーで公式の
+`go1.26.9.linux-amd64.tar.gz`を取得し、絶対パスを明示します。
+上記と同様にtimerを無効化し、サービスを停止してから実行してください。
+
+```bash
+sudo python3 scripts/install-background-development.py --apply --update-coordinator \
+  --go-archive /absolute/path/to/go1.26.9.linux-amd64.tar.gz
+```
+
+導入処理はダウンロードや、指定された実行ファイルのrootでの起動を行いません。
+公式アーカイブのSHA-256
+`42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d`、
+容量制限付きの通常ファイル・ディレクトリ、およびGoの固定値・ライセンス・試験鍵の由来を
+記した8ファイルの正確な置換だけを受け入れます。一般的な依存・ポリシー変更は引き続き
+拒否します。SDKと非公開バックアップ先は同じファイルシステム上にある必要があり、既存の
+起動リンクは`../go/bin/go`を指していなければなりません。旧SDKは
+`updates/<id>/go-previous`へ保持します。明示的な再適用も可能で、その場合も直前のSDKを
+保持します。部分失敗時は停止状態を維持し、自動再試行やマニフェストの編集ではなく原因確認が
+必要です。認証情報と既存の実行証跡は維持します。再開・単発試験の前に導入確認を行ってください。
+
+Go 1.26.9は[GO-2026-6609（HTTP Range）](https://pkg.go.dev/vuln/GO-2026-6609)と
+[GO-2026-6607（TLS ECH）](https://pkg.go.dev/vuln/GO-2026-6607)を修正します。
+ダッシュボードはGoのファイル配信機能を使いますが、このラボのアプリケーションにTLS/ECH
+サーバーの設定はありません。`GODEBUG=httpservecontentmaxranges=0`で上流のRange制限を
+無効化しないでください。固定値や管理環境のSDKの更新だけでは、稼働中のラボバイナリ・VM・
+コンテナーは再ビルドされません。別途ビルド・配備が必要です。過去の検証記録は変更しません。
 
 workerとレビューの標準出力は`worker.jsonl`・`review.jsonl`に、診断出力は別の
 `worker.jsonl.stderr.log`・`review.jsonl.stderr.log`に保存します。すべて権限0600の

@@ -31,7 +31,7 @@
 最初の19イメージ検査の10件は、ファイル名や正規表現の一部分ではなく、ファイル全体のSHA-256で照合しました。
 
 - free5GC証明書ディレクトリ内の9件は、[固定済みComposeの証明書ツリー](https://github.com/free5gc/free5gc-compose/tree/e4e2acebad6d6a8c49cfb03a97d9a09dd40c55c7/cert)で公開されている既定鍵と一致します。[上流NRFイメージのレシピ](https://github.com/free5gc/free5gc-compose/blob/e4e2acebad6d6a8c49cfb03a97d9a09dd40c55c7/nf_nrf/Dockerfile)も既定鍵をイメージへコピーしています。
-- Go SDKの1件は[プラットフォーム証明書検証のテスト](https://github.com/golang/go/blob/go1.26.8/src/crypto/x509/platform_test.go)で使用されるもので、運用者の認証情報ではありません。
+- Go SDKの1件は[プラットフォーム証明書検証のテスト](https://github.com/golang/go/blob/go1.26.9/src/crypto/x509/platform_test.go)で使用されるもので、運用者の認証情報ではありません。
 
 [public-test-keys.json](../config/public-test-keys.json)にパス・ハッシュ・上流の出所を記録し、鍵そのものは含めません。資料収集時に保存イメージのレイヤーと照合し、変更・欠落・別パスの鍵は未確認のまま残します。秘密情報検査の除外は追加しません。公開済みの鍵を本番認証に使用してはいけません。新しいNFレイヤーには鍵を埋め込みませんが、隔離ラボの実行時証明書マウントは変更しておらず、イメージ検査の対象外です。後続レイヤーで鍵を削除しても古いレイヤーに残るため、削除だけでは配布物の秘匿情報除去になりません。
 

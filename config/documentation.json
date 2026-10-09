@@ -5,8 +5,8 @@
       "source": "docs/background-development.md",
       "translation": "docs/background-development.ja.md",
       "kind": "markdown",
-      "source_sha256": "c8372fa5756631bc293e80395b81c3c553339fd0ade65add42aeaa1f1a084cb8",
-      "translation_sha256": "62a5a6feca1411658aa8fbde73970db6a7a547730c584b0be09d9d925ba81c24"
+      "source_sha256": "f74cdcae983a5de6c9896611066c627e192057542e0c5312cdc6831f4ebdc95c",
+      "translation_sha256": "72a8c10ceac2d11c9ea8883c56f32553ee0bc7a260877ba47794073c1addea7e"
     },
     {
       "source": "AGENTS.md",
@@ -40,8 +40,8 @@
       "source": "docs/image-distribution.md",
       "translation": "docs/image-distribution.ja.md",
       "kind": "markdown",
-      "source_sha256": "95b87be6885ac294253313b797f6c9fb107b773610ab36957ef158c10961fb5c",
-      "translation_sha256": "5ffc0bcdcf25794b600c3d73e8a942fe28e38c8e594cb4ab664f9f646a4a5908"
+      "source_sha256": "0e17a1c9b1e2baacbf1f1dd270d019b73d11fe25a25bf2a504378655dd308841",
+      "translation_sha256": "6061b8bfcbb067849c7c44b51950a61bd6f2fa33d6ee822a3fe80705c5a3b2fe"
     },
     {
       "source": "docs/compact-lab.md",
