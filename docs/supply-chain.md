@@ -90,6 +90,30 @@ exploitability of this lab's in-process GoBGP use. This is a source dependency
 update; it does not replace running guest binaries. Dependency checks and a
 full clean-OS forwarding validation are separate evidence levels.
 
+## 2026-10-10 HTTP/2 dependency update
+
+[GO-2026-6611 / CVE-2026-78669](https://pkg.go.dev/vuln/GO-2026-6611)
+affects HTTP/2 peers that repeatedly change the initial stream window while
+many streams are open. The upstream fix replaces per-stream updates with shared
+connection state. The root module lock and external compact-build floor now
+select x/net 0.60.0; the root graph also needs x/sys 0.48.0 and x/text 0.42.0.
+The existing Go 1.26.9 pin already includes the standard-library fix.
+
+GoBGP/gRPC and Connect bring HTTP/2 code into the dependency graph. Presence in
+a binary does not establish exploitability: the default controller uses an
+in-process GoBGP server without its gRPC listener and serves plain HTTP without
+explicit h2c configuration. The dependency is updated at its shared upstream
+boundary, without changing the lab protocols or suppressing the scanner finding.
+
+The compact policy applies to future external builds, not existing binaries.
+Transitive module selection can exceed its individual minimum versions. Retained
+image validation records describe their original builds; they are not updated
+security attestations. Existing VM/container binaries, legacy reference images
+and the reference profile's separate Vinbero dependency graph are not repaired
+by this source update. They require separate rebuild and runtime validation.
+The installed background coordinator snapshot also remains unchanged; merging
+source does not update its manifest or deployment.
+
 ## Publication boundary
 
 Use the [source distribution workflow](source-distribution.md) for a local,
