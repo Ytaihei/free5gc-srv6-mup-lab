@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "reviewed": "2026-09-23",
+  "reviewed": "2026-10-10",
   "modules": {
     "github.com/free5gc/smf": "v1.4.5",
     "golang.org/x/crypto": "v0.55.0",
-    "golang.org/x/net": "v0.58.0",
+    "golang.org/x/net": "v0.60.0",
     "golang.org/x/text": "v0.41.0",
     "google.golang.org/grpc": "v1.83.2"
   },

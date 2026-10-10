@@ -40,8 +40,8 @@
       "source": "docs/image-distribution.md",
       "translation": "docs/image-distribution.ja.md",
       "kind": "markdown",
-      "source_sha256": "0e17a1c9b1e2baacbf1f1dd270d019b73d11fe25a25bf2a504378655dd308841",
-      "translation_sha256": "6061b8bfcbb067849c7c44b51950a61bd6f2fa33d6ee822a3fe80705c5a3b2fe"
+      "source_sha256": "ffcbea7457bf966b275b848e819009ce22eb2b48297b04bf017a735c2448f61a",
+      "translation_sha256": "a671503443e21e2e504dd27b6b94f285eb9d120d9b04d42bf9200bbdc2237124"
     },
     {
       "source": "docs/compact-lab.md",
@@ -145,8 +145,8 @@
       "source": "docs/supply-chain.md",
       "translation": "docs/supply-chain.ja.md",
       "kind": "markdown",
-      "source_sha256": "d67205970b8557f1cbbcc9043529cfbfbb4f4ea98215db57025372539fb2509b",
-      "translation_sha256": "d09b7f2c64668e43fde3627d0f6514dd1b4a0c6a9342bf24bd46c81fcdc9915f"
+      "source_sha256": "677275ef2f11692a32783f2f2ddcf6c3bcd7bc3dce6fccfdde82f08112ce2cdf",
+      "translation_sha256": "e57285511c92abf89200ad02c8e0f37cbe698f74cb1f02649329e0c389f45df7"
     },
     {
       "source": "docs/validation-summary.md",
