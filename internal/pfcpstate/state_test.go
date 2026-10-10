@@ -239,3 +239,217 @@ func messageBytes(t *testing.T, header pfcp.Header, body any) []byte {
 	}
 	return b
 }
+
+func TestUnacceptedResponsesDiscardPendingTransaction(t *testing.T) {
+	for _, kind := range []string{"establishment", "modification", "deletion"} {
+		for _, missingCause := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/missing-cause=%v", kind, missingCause), func(t *testing.T) {
+				state := establishedState(t)
+				now := time.Unix(500, 0)
+				cause := &pfcpType.Cause{CauseValue: pfcpType.CauseRequestRejected}
+				if missingCause {
+					cause = nil
+				}
+				var request []byte
+				var responseType pfcp.MessageType
+				var rejectedBody, acceptedBody any
+				switch kind {
+				case "establishment":
+					state = New()
+					request = establishmentRequest(t, 30)
+					responseType = pfcp.PFCP_SESSION_ESTABLISHMENT_RESPONSE
+					body := pfcp.PFCPSessionEstablishmentResponse{
+						Cause: cause,
+						UPFSEID: &pfcpType.FSEID{V4: true, Seid: 0x2222,
+							Ipv4Address: net.ParseIP("10.100.200.102").To4()},
+					}
+					rejectedBody = body
+					body.Cause = &pfcpType.Cause{CauseValue: pfcpType.CauseRequestAccepted}
+					acceptedBody = body
+				case "modification":
+					request = messageBytes(t, pfcp.Header{Version: 1, S: 1, MessageType: pfcp.PFCP_SESSION_MODIFICATION_REQUEST, SEID: 0x2222, SequenceNumber: 30}, pfcp.PFCPSessionModificationRequest{
+						UpdateQER: []*pfcp.UpdateQER{{QoSFlowIdentifier: &pfcpType.QFI{QFI: 7}}},
+					})
+					responseType = pfcp.PFCP_SESSION_MODIFICATION_RESPONSE
+					rejectedBody = pfcp.PFCPSessionModificationResponse{Cause: cause}
+					acceptedBody = pfcp.PFCPSessionModificationResponse{Cause: &pfcpType.Cause{CauseValue: pfcpType.CauseRequestAccepted}}
+				case "deletion":
+					request = messageBytes(t, pfcp.Header{Version: 1, S: 1, MessageType: pfcp.PFCP_SESSION_DELETION_REQUEST, SEID: 0x2222, SequenceNumber: 30}, pfcp.PFCPSessionDeletionRequest{})
+					responseType = pfcp.PFCP_SESSION_DELETION_RESPONSE
+					rejectedBody = pfcp.PFCPSessionDeletionResponse{Cause: cause}
+					acceptedBody = pfcp.PFCPSessionDeletionResponse{Cause: &pfcpType.Cause{CauseValue: pfcpType.CauseRequestAccepted}}
+				}
+				before := state.Snapshot()
+				if kind != "establishment" && len(before) != 1 {
+					t.Fatalf("setup sessions = %+v", before)
+				}
+				if changed, err := state.Consume(smf, upf, request, now); err != nil || changed {
+					t.Fatalf("request: changed=%v err=%v", changed, err)
+				}
+				if got := state.Snapshot(); !reflect.DeepEqual(got, before) {
+					t.Fatalf("request changed snapshot: got=%+v want=%+v", got, before)
+				}
+				header := pfcp.Header{Version: 1, S: 1, MessageType: responseType, SEID: 0x1111, SequenceNumber: 30}
+				// An accepted response after rejection cannot revive the consumed request.
+				for i, body := range []any{rejectedBody, acceptedBody} {
+					if changed, err := state.Consume(upf, smf, messageBytes(t, header, body), now.Add(time.Duration(i+1)*time.Second)); err != nil || changed {
+						t.Fatalf("response %d: changed=%v err=%v", i, changed, err)
+					}
+					if got := state.Snapshot(); !reflect.DeepEqual(got, before) {
+						t.Fatalf("response %d changed snapshot: got=%+v want=%+v", i, got, before)
+					}
+				}
+				// A fresh request with the same sequence can still be accepted.
+				if changed, err := state.Consume(smf, upf, request, now.Add(3*time.Second)); err != nil || changed {
+					t.Fatalf("fresh request: changed=%v err=%v", changed, err)
+				}
+				committedAt := now.Add(4 * time.Second)
+				if changed, err := state.Consume(upf, smf, messageBytes(t, header, acceptedBody), committedAt); err != nil || !changed {
+					t.Fatalf("fresh acceptance: changed=%v err=%v", changed, err)
+				}
+				got := state.Snapshot()
+				switch kind {
+				case "establishment":
+					if len(got) != 1 || got[0].UPSEID != 0x2222 || !got[0].ObservedAt.Equal(committedAt) {
+						t.Fatalf("accepted establishment = %+v", got)
+					}
+				case "modification":
+					want := before[0]
+					want.QFI, want.ObservedAt = 7, committedAt
+					if len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+						t.Fatalf("accepted modification: got=%+v want=%+v", got, want)
+					}
+				case "deletion":
+					if len(got) != 0 {
+						t.Fatalf("accepted deletion retained sessions: %+v", got)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestEstablishmentResponseMatching(t *testing.T) {
+	for _, mismatch := range []string{"direction", "source", "destination", "sequence", "kind"} {
+		t.Run(mismatch, func(t *testing.T) {
+			state := New()
+			now := time.Unix(600, 0)
+			if changed, err := state.Consume(smf, upf, establishmentRequest(t, 40), now); err != nil || changed {
+				t.Fatalf("request: changed=%v err=%v", changed, err)
+			}
+			src, dst := upf, smf
+			response := establishmentResponse(t, 40, pfcpType.CauseRequestAccepted)
+			switch mismatch {
+			case "direction":
+				src, dst = smf, upf
+			case "source":
+				src = "10.100.200.103:8805"
+			case "destination":
+				dst = "10.100.200.19:8805"
+			case "sequence":
+				response = establishmentResponse(t, 41, pfcpType.CauseRequestAccepted)
+			case "kind":
+				response = messageBytes(t, pfcp.Header{Version: 1, S: 1, MessageType: pfcp.PFCP_SESSION_DELETION_RESPONSE, SEID: 0x1111, SequenceNumber: 40}, pfcp.PFCPSessionDeletionResponse{Cause: &pfcpType.Cause{CauseValue: pfcpType.CauseRequestAccepted}})
+			}
+			if changed, err := state.Consume(src, dst, response, now.Add(time.Second)); err != nil || changed || len(state.Snapshot()) != 0 {
+				t.Fatalf("mismatched response: changed=%v err=%v snapshot=%+v", changed, err, state.Snapshot())
+			}
+			matching := establishmentResponse(t, 40, pfcpType.CauseRequestAccepted)
+			if changed, err := state.Consume(upf, smf, matching, now.Add(2*time.Second)); err != nil || !changed || len(state.Snapshot()) != 1 {
+				t.Fatalf("matching response: changed=%v err=%v snapshot=%+v", changed, err, state.Snapshot())
+			}
+			before := state.Snapshot()
+			if changed, err := state.Consume(upf, smf, matching, now.Add(3*time.Second)); err != nil || changed {
+				t.Fatalf("duplicate response: changed=%v err=%v", changed, err)
+			}
+			if got := state.Snapshot(); !reflect.DeepEqual(got, before) {
+				t.Fatalf("duplicate changed snapshot: got=%+v want=%+v", got, before)
+			}
+		})
+	}
+}
+
+func TestEstablishmentPendingExpiryBoundary(t *testing.T) {
+	for _, delay := range []time.Duration{30 * time.Second, 30*time.Second + time.Nanosecond} {
+		t.Run(delay.String(), func(t *testing.T) {
+			state := New()
+			now := time.Unix(700, 0)
+			if changed, err := state.Consume(smf, upf, establishmentRequest(t, 50), now); err != nil || changed {
+				t.Fatalf("request: changed=%v err=%v", changed, err)
+			}
+			wantChanged := delay == 30*time.Second
+			changed, err := state.Consume(upf, smf, establishmentResponse(t, 50, pfcpType.CauseRequestAccepted), now.Add(delay))
+			if err != nil || changed != wantChanged {
+				t.Fatalf("response after %s: changed=%v want=%v err=%v", delay, changed, wantChanged, err)
+			}
+			wantCount := 0
+			if wantChanged {
+				wantCount = 1
+			}
+			if got := state.Snapshot(); len(got) != wantCount {
+				t.Fatalf("response after %s: sessions=%+v want count=%d", delay, got, wantCount)
+			}
+		})
+	}
+}
+
+func TestModificationAndDeletionPendingExpiryBoundary(t *testing.T) {
+	for _, kind := range []string{"modification", "deletion"} {
+		for _, delay := range []time.Duration{30 * time.Second, 30*time.Second + time.Nanosecond} {
+			t.Run(kind+"/"+delay.String(), func(t *testing.T) {
+				state := establishedState(t)
+				before := state.Snapshot()
+				if len(before) != 1 {
+					t.Fatalf("setup sessions = %+v", before)
+				}
+				now := time.Unix(800, 0)
+				requestHeader := pfcp.Header{Version: 1, S: 1, SEID: 0x2222, SequenceNumber: 60}
+				responseHeader := pfcp.Header{Version: 1, S: 1, SEID: 0x1111, SequenceNumber: 60}
+				var requestBody, responseBody any
+				if kind == "modification" {
+					requestHeader.MessageType = pfcp.PFCP_SESSION_MODIFICATION_REQUEST
+					responseHeader.MessageType = pfcp.PFCP_SESSION_MODIFICATION_RESPONSE
+					requestBody = pfcp.PFCPSessionModificationRequest{
+						UpdateQER: []*pfcp.UpdateQER{{QoSFlowIdentifier: &pfcpType.QFI{QFI: 7}}},
+					}
+					responseBody = pfcp.PFCPSessionModificationResponse{Cause: &pfcpType.Cause{CauseValue: pfcpType.CauseRequestAccepted}}
+				} else {
+					requestHeader.MessageType = pfcp.PFCP_SESSION_DELETION_REQUEST
+					responseHeader.MessageType = pfcp.PFCP_SESSION_DELETION_RESPONSE
+					requestBody = pfcp.PFCPSessionDeletionRequest{}
+					responseBody = pfcp.PFCPSessionDeletionResponse{Cause: &pfcpType.Cause{CauseValue: pfcpType.CauseRequestAccepted}}
+				}
+				if changed, err := state.Consume(smf, upf, messageBytes(t, requestHeader, requestBody), now); err != nil || changed {
+					t.Fatalf("request: changed=%v err=%v", changed, err)
+				}
+				if got := state.Snapshot(); !reflect.DeepEqual(got, before) {
+					t.Fatalf("request changed snapshot: got=%+v want=%+v", got, before)
+				}
+				response := messageBytes(t, responseHeader, responseBody)
+				responseAt := now.Add(delay)
+				wantChanged := delay == 30*time.Second
+				if changed, err := state.Consume(upf, smf, response, responseAt); err != nil || changed != wantChanged {
+					t.Fatalf("response: changed=%v want=%v err=%v", changed, wantChanged, err)
+				}
+				want := before
+				if wantChanged {
+					if kind == "deletion" {
+						want = before[:0]
+					} else {
+						want[0].QFI = 7
+						want[0].ObservedAt = responseAt
+					}
+				}
+				if got := state.Snapshot(); !reflect.DeepEqual(got, want) {
+					t.Fatalf("response snapshot: got=%+v want=%+v", got, want)
+				}
+				if changed, err := state.Consume(upf, smf, response, responseAt.Add(time.Second)); err != nil || changed {
+					t.Fatalf("duplicate response: changed=%v err=%v", changed, err)
+				}
+				if got := state.Snapshot(); !reflect.DeepEqual(got, want) {
+					t.Fatalf("duplicate changed snapshot: got=%+v want=%+v", got, want)
+				}
+			})
+		}
+	}
+}
