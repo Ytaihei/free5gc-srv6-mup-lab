@@ -22,9 +22,14 @@ For unattended runs, execute `make check`, `make lint`, the Ansible syntax check
 and secret checks in the credential-free checking environment. Runtime evidence requires separate,
 explicit lab operations and must remain private unless reviewed for release.
 
-Only bounded prose fixes and additive tests of existing behavior are candidates
-for automatic merging, after an independent immutable review and all required CI
-checks. Runtime code, dependencies, policy, infrastructure, licenses, executable
+Bounded prose fixes, additive tests of existing behavior and compatible updates
+of existing stable Go dependencies (including compact build floors) are candidates
+for automatic merging after independent immutable review and all required CI.
+Follow the dependency criteria in the background guide: no major upgrade,
+downgrade, new module/source, toolchain change, license exception or scanner bypass;
+uncertain compatibility or required live validation still needs human review.
+This policy does not enable the installed automatic-merge switch or deploy updates.
+Runtime code, policy, infrastructure, licenses, executable
 examples, standards/validation claims and these instructions require human review.
 Do not weaken checks, delete tests or bypass branch protection.
 

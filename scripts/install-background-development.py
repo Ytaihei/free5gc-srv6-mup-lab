@@ -27,6 +27,22 @@ COORDINATOR_UPDATE_PATHS = {
     'docs/background-development.md', 'docs/background-development.ja.md',
     'config/documentation.json',
 }
+# Explicit one-time policy transition, not permission for arbitrary worker policy edits.
+# Includes the already tested x/net source update; does not rebuild/deploy lab binaries.
+DEPENDENCY_POLICY_REPAIR_HASHES = {
+    'AGENTS.md': 'c147b36c9e07c2856ee9d2c54cec6cf5aadb35c0236eeb28270838f465a0d6ab',
+    'AGENTS.ja.md': '89b76d09a7bc28aa0f9e3a065c8fe8aaddf5ca14c7511ce94693f00aa2bd8550',
+    'scripts/background_development.py': '3d61cde7591415f6bf183b9eb73bc3e25bf4289e4e071baaa0a20bb48318d2de',
+    'config/background-development.yml': '32558cf9d8e2689cffd9683091c2d22d315471fb389ee4882d1194e8e0d1a7fb',
+    'go.mod': '550095234a559e487d0ceb2421958bfda258fa359781128c484c9815909f43c3',
+    'go.sum': '5db6a7346f43988a2a7a856642982b7a1f4610ab671dd14d3952db23dcd46ac6',
+    'config/compact-dependencies.json': 'aee2d9453558cba35047370b72d10fb4b5392db74f2b054d648b1808b9bccb41',
+    'tests/test_compact_dependencies.py': '383feebfcbebffd3a3c6cc3d039d8b877c00b87c9bbca51461fb9c7468c93790',
+    'docs/supply-chain.md': '677275ef2f11692a32783f2f2ddcf6c3bcd7bc3dce6fccfdde82f08112ce2cdf',
+    'docs/supply-chain.ja.md': 'e57285511c92abf89200ad02c8e0f37cbe698f74cb1f02649329e0c389f45df7',
+    'docs/image-distribution.md': 'ffcbea7457bf966b275b848e819009ce22eb2b48297b04bf017a735c2448f61a',
+    'docs/image-distribution.ja.md': 'a671503443e21e2e504dd27b6b94f285eb9d120d9b04d42bf9200bbdc2237124',
+}
 # Deliberately one reviewed security transition, not a general dependency updater.
 GO_REPAIR_VERSION = '1.26.9'
 GO_REPAIR_SHA256 = '42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d'
@@ -118,12 +134,16 @@ def codex_package_payloads(directory):
     return payloads
 
 
-def update_coordinator(codex_package=None, go_archive=None):
+def update_coordinator(codex_package=None, go_archive=None, dependency_policy=False):
     """Explicit, narrow repair of a stopped installation; preserve auth and data."""
     protected(INSTALL / 'installation.json')
     protected(INSTALL / 'operator.json')
     manifest = json.loads((INSTALL / 'installation.json').read_text())
     inventory = json.loads((ROOT / 'config/public-source.json').read_text())['files']
+    if dependency_policy and (go_archive is not None or codex_package is not None):
+        raise ValueError('dependency policy transition cannot be combined with tool repair')
+    if dependency_policy and not set(DEPENDENCY_POLICY_REPAIR_HASHES).issubset(inventory):
+        raise ValueError('dependency policy transition requires its complete pinned inventory')
     legacy = set(inventory) | {'bin/codex', 'review-schema.json'}
     if set(manifest['files']) not in (legacy, legacy | set(CODEX_FILES)):
         raise ValueError('coordinator repair cannot add/remove inventory or tools')
@@ -145,6 +165,9 @@ def update_coordinator(codex_package=None, go_archive=None):
         if source.is_symlink() or not source.is_file() or not source.resolve().is_relative_to(ROOT):
             raise ValueError('unsafe source for coordinator repair')
         payload = source.read_bytes()
+        if dependency_policy and name in DEPENDENCY_POLICY_REPAIR_HASHES:
+            if hashlib.sha256(payload).hexdigest() != DEPENDENCY_POLICY_REPAIR_HASHES[name]:
+                raise ValueError('dependency policy transition accepts only the pinned reviewed bytes')
         if go_payload is not None and name in GO_REPAIR_PATHS:
             if payload != go_repair_bytes((INSTALL / name).read_bytes()):
                 raise ValueError('Go repair accepts only the exact reviewed pin substitutions')
@@ -155,7 +178,9 @@ def update_coordinator(codex_package=None, go_archive=None):
                         or locked['platform'] != 'linux-amd64'):
                     raise ValueError('Go repair candidate does not pin the reviewed SDK')
         if hashlib.sha256(payload).hexdigest() != manifest['files'][name]:
-            if name not in COORDINATOR_UPDATE_PATHS and not (go_payload is not None and name in GO_REPAIR_PATHS):
+            if (name not in COORDINATOR_UPDATE_PATHS
+                    and not (go_payload is not None and name in GO_REPAIR_PATHS)
+                    and not (dependency_policy and name in DEPENDENCY_POLICY_REPAIR_HASHES)):
                 raise ValueError('coordinator repair cannot change policy, dependencies, units or lab code')
             changes[name] = payload
     additions = {}
@@ -301,8 +326,12 @@ def main():
                         help='reuse exact protected templates after disabling their timers; never overwrite custom units')
     parser.add_argument('--update-coordinator', action='store_true',
                         help='repair only reviewed coordinator source; preserve accounts, credentials, tools and lab data')
+    parser.add_argument('--dependency-policy', action='store_true',
+                        help='explicitly install the pinned compatible-dependency policy transition')
     args = parser.parse_args()
     load_policy()
+    if args.dependency_policy and (not args.update_coordinator or args.go_archive or args.codex_package):
+        raise ValueError('--dependency-policy requires --update-coordinator without tool repair')
     if args.update_coordinator:
         if args.codex or args.go_root or args.adopt_existing_units:
             raise ValueError('coordinator repair cannot be combined with installation options')
@@ -311,7 +340,7 @@ def main():
             return
         if os.geteuid() != 0:
             raise ValueError('--apply requires sudo; no password is read by this script')
-        update_coordinator(args.codex_package, args.go_archive)
+        update_coordinator(args.codex_package, args.go_archive, args.dependency_policy)
         return
     if args.go_archive:
         raise ValueError('--go-archive is only for --update-coordinator')
