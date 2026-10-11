@@ -35,8 +35,8 @@ tasks:
     priority: 30
     kind: maintenance
     depends_on: []
-    paths: [docs/]
-    acceptance: Review existing dependency PRs for compatibility and missing evidence. Report recommendations only; dependency changes require human review.
+    paths: [go.mod, go.sum, config/compact-dependencies.json, tests/test_compact_dependencies.py, docs/supply-chain.md, docs/supply-chain.ja.md, docs/image-distribution.md, docs/image-distribution.ja.md]
+    acceptance: Review dependency advisories and prepare a bounded compatible update of existing stable Go modules and compact build floors. Preserve module identities, major versions, toolchain directives, license pins and scanner policy. Record upstream compatibility evidence and affected paths in paired documentation; add regression tests where relevant. Missing evidence, major upgrades, new dependencies, runtime edits or live validation requirements need a decision. Do not modify unrelated PRs or claim deployment.
     profiles: []
   - id: convergence-measurement-design
     priority: 40
