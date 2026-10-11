@@ -19,7 +19,7 @@ The source CI continues using its separate, unchanged policy.
 ## Dependency remediation
 
 [compact-dependencies.json](../config/compact-dependencies.json) specifies
-minimum versions for external compact Go builds: x/crypto 0.55.0, x/net 0.58.0,
+minimum versions for external compact Go builds: x/crypto 0.55.0, x/net 0.60.0,
 x/text 0.41.0 and gRPC 1.83.2. The original project's own module locks already
 select the applicable newer versions. External sources are copied into build
 scratch space before updating; editable host worktrees are preserved. Newer
