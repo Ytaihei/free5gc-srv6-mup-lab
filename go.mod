@@ -7,7 +7,7 @@ require (
 	github.com/free5gc/pfcp v1.1.2
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.6.0
-	github.com/osrg/gobgp/v4 v4.9.0
+	github.com/osrg/gobgp/v4 v4.10.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
