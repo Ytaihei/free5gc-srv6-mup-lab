@@ -1,0 +1,19 @@
+[Unit]
+Description=Opt-in Issue-driven local development (not the legacy scheduler)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/share/srv6-mup-issues/source/scripts/issue-development.py --config %h/.config/srv6-mup-issues/operator.json serve
+UMask=0077
+NoNewPrivileges=yes
+KillMode=control-group
+TimeoutStopSec=20
+MemoryMax=8G
+CPUQuota=200%
+TasksMax=512
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=default.target

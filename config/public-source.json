@@ -258,7 +258,16 @@
     "tests/test_templates.py",
     "third_party/vinbero/README.ja.md",
     "third_party/vinbero/README.md",
-    "third_party/vinbero/patches/0001-gobgp-v4.8-mup-draft01.patch"
+    "third_party/vinbero/patches/0001-gobgp-v4.8-mup-draft01.patch",
+    "config/issue-development.example.json",
+    "configs/systemd/srv6-mup-issues.service",
+    "docs/issue-development.ja.md",
+    "docs/issue-development.md",
+    "scripts/issue-development.py",
+    "scripts/issue-git-askpass.py",
+    "scripts/issue_development.py",
+    "scripts/issue_worker.py",
+    "tests/test_issue_development.py"
   ],
   "private_only": [
     "ansible/roles/mup_controller/templates/gobgpd.toml.j2",

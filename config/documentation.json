@@ -68,8 +68,8 @@
       "source": "README.md",
       "translation": "README.ja.md",
       "kind": "markdown",
-      "source_sha256": "21972cf11db67854bf39cc4202fe5978846f899ff827fe281edf115df5127b01",
-      "translation_sha256": "e680446dcd7d9b5c1db2e3bffabb3732ff66b2fa7cde4f7f5bfe2e44b65317a9"
+      "source_sha256": "c40fd15af4b71734f7def248b5cb676bf425a6f3e1f5c3ec6d7a1e54eebebaf0",
+      "translation_sha256": "0b5dd122bc7edb51555e37f494c7e808962fd358f7f0e6a9dc0fcccb0239b631"
     },
     {
       "source": "SECURITY.md",
@@ -203,6 +203,13 @@
       "kind": "markdown",
       "source_sha256": "ac2ed088eb9d561a9f714fa7fe3a4da1e89ce6eb566fca20010a092f09786d84",
       "translation_sha256": "a0ecd19437b46eeb226edc05812fa4a7b8cc1657bbbe54fc044fa6880efdc205"
+    },
+    {
+      "source": "docs/issue-development.md",
+      "translation": "docs/issue-development.ja.md",
+      "kind": "markdown",
+      "source_sha256": "ff69b9e0e182c9f10316fb35b6e91df4e47546a154ebace15a5ee1cec55ced73",
+      "translation_sha256": "68164484e9d898e5e21aae9b2004ad54c4869a5e8df9ac7ea7518f73c02b5973"
     }
   ]
 }
