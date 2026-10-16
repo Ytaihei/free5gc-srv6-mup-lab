@@ -196,6 +196,10 @@ PRから自己更新はしません。これらのコマンド自体はソース
 止める操作であり、実行中のワーカーを終了させるものではありません。失敗するとキューを停止して
 証跡を残します。未公開の失敗・中断・レビュー却下を確認し、古い実行を保持したまま1回だけ再試行するには:
 
+再起動後、準備・開発・検査・レビュー中のタスクが残っていた場合は中断として記録し、
+Issueの取り込みや別タスクの開始より前にキュー全体を停止します。通知失敗でも停止を
+維持します。証跡を確認した上で、明示的な再試行と再開をそれぞれ実施してください。
+
 ```bash
 python3 scripts/issue-development.py --config /absolute/private/operator.json retry JOB_ID
 python3 scripts/issue-development.py --config /absolute/private/operator.json resume

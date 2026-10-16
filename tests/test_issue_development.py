@@ -213,6 +213,38 @@ class IssueTests(unittest.TestCase):
             coordinator.tick()
         work.assert_not_called()
         self.assertEqual(coordinator.store.load()['jobs']['21-123']['status'], 'interrupted')
+        self.assertTrue(coordinator.store.load()['paused'])
+
+    def test_interruption_pauses_other_jobs_before_intake_or_model_calls(self):
+        for status in dev.ACTIVE:
+            with self.subTest(status=status):
+                coordinator, gh = self.coordinator(status)
+                state = coordinator.store.load()
+                state['jobs']['queued-fixture'] = {**state['jobs']['21-123'],
+                                                  'id': 'queued-fixture', 'status': 'queued'}
+                coordinator.store.save(state)
+                with patch.object(coordinator, 'collect') as collect, \
+                        patch.object(coordinator, 'develop') as work, \
+                        patch.object(coordinator, 'run_review') as review, \
+                        patch.object(coordinator.store, 'save', wraps=coordinator.store.save) as saves:
+                    coordinator.tick()
+                self.assertTrue(all(call.args[0]['paused'] for call in saves.call_args_list))
+                collect.assert_not_called()
+                work.assert_not_called()
+                review.assert_not_called()
+                after = coordinator.store.load()
+                self.assertTrue(after['paused'])
+                self.assertEqual(after['jobs']['queued-fixture']['status'], 'queued')
+                self.assertEqual(after['jobs']['21-123']['status'], 'interrupted')
+
+    def test_interrupted_notification_failure_keeps_queue_paused(self):
+        coordinator, _ = self.coordinator('checking')
+        with patch.object(coordinator, 'notify', side_effect=OSError('fixture')):
+            coordinator.tick()
+        state = coordinator.store.load()
+        self.assertTrue(state['paused'])
+        self.assertTrue(state['jobs']['21-123']['notice_pending'])
+        self.assertEqual(state['jobs']['21-123']['status'], 'interrupted')
 
     def test_changed_issue_cancels_before_work(self):
         coordinator, gh = self.coordinator()

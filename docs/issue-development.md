@@ -209,8 +209,15 @@ are neither used nor enabled.
 
 Stop the service to interrupt active work. `pause` prevents future work after it
 obtains the state lock; it does not kill an active worker. Failure pauses the queue
-and retains evidence. To retry an inspected unpublished failed/interrupted/rejected
-task once, preserving old runs:
+and retains evidence.
+
+After a restart, any task left in preparing, working, checking or reviewing is
+marked interrupted and pauses the entire queue before intake or other queued work.
+Notification failure does not unpause recovery. Inspect the retained evidence;
+explicit retry and resume remain separate operator actions.
+
+To retry an inspected unpublished failed/interrupted/rejected task once,
+preserving old runs:
 
 ```bash
 python3 scripts/issue-development.py --config /absolute/private/operator.json retry JOB_ID

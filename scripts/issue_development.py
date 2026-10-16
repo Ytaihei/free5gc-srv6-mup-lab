@@ -570,9 +570,21 @@ class Coordinator:
             state = self.store.load()
             if state['paused']:
                 return
-            for job in state['jobs'].values():
-                if job['status'] in ACTIVE:
+            interrupted = [job for job in state['jobs'].values() if job['status'] in ACTIVE]
+            if interrupted:
+                # Recovery is not permission to start another queued task.
+                # Persist the pause with the first transition, even if recovery
+                # itself is stopped between state writes.
+                state['paused'] = True
+                for job in interrupted:
                     self.save(state, job, 'interrupted')
+                for job in interrupted:
+                    try:
+                        self.notify(state, job)
+                    except Exception:
+                        job['notice_pending'] = True
+                        self.save(state)
+                return
             self.collect(state)
             developed = False
             for job in state['jobs'].values():
