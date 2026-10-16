@@ -208,8 +208,15 @@
       "source": "docs/issue-development.md",
       "translation": "docs/issue-development.ja.md",
       "kind": "markdown",
-      "source_sha256": "ff69b9e0e182c9f10316fb35b6e91df4e47546a154ebace15a5ee1cec55ced73",
-      "translation_sha256": "68164484e9d898e5e21aae9b2004ad54c4869a5e8df9ac7ea7518f73c02b5973"
+      "source_sha256": "128cac8cbca90fb5d273cae6b763d4b4842473d0093c0a527ce428665235e2a7",
+      "translation_sha256": "d6d346fe8c689782d62588c598abeec7da75399c9e039d8f6142656d26087029"
+    },
+    {
+      "source": "docs/issue-chatgpt-pilot.md",
+      "translation": "docs/issue-chatgpt-pilot.ja.md",
+      "kind": "markdown",
+      "source_sha256": "c5612fa547bdd1e162b2ca4f21ca74a2a53a9645176d9b20b0b29349f7d53347",
+      "translation_sha256": "e6c00766a9792cc9a2efa1e0f60605b348c1e845b9ecbbaa9c2b4833dd5e0d06"
     }
   ]
 }

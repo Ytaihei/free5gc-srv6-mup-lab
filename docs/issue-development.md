@@ -9,6 +9,10 @@ It does not install or enable a service, restart old timers, copy credentials,
 operate the live lab, or publish images. Defaults are disabled and paused.
 Passing offline tests does not attest a live Issue/PR/CI/merge cycle.
 
+Review now uses ChatGPT-plan OAuth only. Start with the separate
+[connection pilot](issue-chatgpt-pilot.md) and keep the coordinator disabled until
+the local review and eventual Issue/PR acceptance have been inspected.
+
 Ask Codex to create an Issue with a goal, allowed paths and acceptance criteria.
 Backlog creation alone does not authorize execution. An explicit request to start
 development may add the ready label. Both the Issue author and the actor on the
@@ -103,20 +107,46 @@ PR and check-reading access, plus the read access needed to inspect branch rules
 do not grant protection bypass. No token is put in command arguments or worker
 environments. Publishing uses a trusted Git credential adapter outside the checks.
 
-Independent review uses the OpenAI Responses API, with no tools, a fixed schema
-and the exact candidate commit/diff/changed files. Configure `review_model` and
-`review_api_key_file` explicitly. The key file has the same private-file rules.
-An absent reviewer leaves work at `awaiting-review`; it is not replaced by Qwen
-self-review or a reused ChatGPT login. API usage is billable. The default limit is
-one review call per UTC day, at most 80 KB of input and 3,000 output tokens; reserve
-calls before sending, including failed calls. These limits are not a dollar cap:
-set the provider project's spending controls as well. No key is requested or
-loaded by plan/status or a local trial.
+Version 2 configuration replaces the paid API key with `review_session_dir`, the
+dedicated pilot OAuth directory (outside source and coordinator state), and
+`review_included_only_confirmed`. Select `review_model` from that account's model
+catalog. Old version 1/API-key settings are rejected, not silently migrated.
+Never copy an unrelated Codex login. There is no Platform-key or paid fallback.
+Before confirming included-only use, verify that paid-credit consumption cannot
+occur and automatic purchases are off. For a manual trial, a confirmed zero credit
+balance with automatic additions disabled is also an operator-confirmed boundary;
+it is not an indefinitely enforced account spending cap. Recheck after account changes.
+
+The tool-free reviewer receives the immutable commit, task, diff and full changed
+files and returns the existing strict SHA-bound JSON schema. Malformed, conflicting,
+refused or incomplete output cannot approve. It uses streaming array input and
+requires a successful completion event, including when text arrives only as deltas.
+After successful isolated checks, the coordinator supplies the commands, observed
+exit codes and private-log SHA-256 hashes bound to the candidate head. Raw logs
+and host paths are not sent. These observations are not proof of test coverage;
+missing evidence stays missing and the reviewer must not invent a successful run.
+Limits are one reserved call per UTC day by default (including failures), 80 KB
+input, 64 KB response text, 1 MiB stream and an elapsed-time check. These client
+limits are not a server token or monetary cap; unsupported `max_output_tokens`
+is not sent. plan/status and the Qwen-only trial do not load reviewer credentials.
+
+The same private-directory lock as login serializes refresh and inference. Near
+expiry the reviewer refreshes the issued client session and atomically stores the
+rotated token. A pending rotation after a crash or network ambiguity blocks reuse
+until sign-in; confirmed unusable refresh tokens are cleared, retaining registration.
+New refresh ID tokens are signature/issuer/audience/subject checked when returned.
+Temporary errors never trigger another billing path or silent model substitution.
+
+Quota/auth/provider failures leave jobs at `awaiting-review` and set a shared
+`review_hold`; polling does not repeatedly call the reviewer. Inspect the fixed
+diagnostic in status/private `review-wait.json`, resolve the issue, and explicitly
+run `review-resume`. This clears only the review hold, not daily counts or the
+development pause. It does not assume a quota-reset time or re-run Qwen.
 
 Uncertain findings or insufficient upstream compatibility evidence block approval.
 This initial reviewer cannot browse upstream sources or run extra tools; dependency
 updates can therefore require a human decision even when the static scope gate allows them.
-See [OpenAI automation guidance](https://learn.chatgpt.com/docs/non-interactive-mode)
+See [ChatGPT-plan sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
 and [structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
 
 ## Trial, run and stop
@@ -132,6 +162,25 @@ python3 scripts/issue-development.py --config /absolute/private/operator.json tr
 
 Evidence remains under the private state directory even on failure. A successful
 trial ends at `awaiting-review`, not at merged. Inspect the diff and check logs.
+To review an existing local Qwen candidate with all three switches still off:
+
+```bash
+python3 scripts/issue-development.py --config /absolute/private/operator.json review-local \
+  --source /absolute/private/trial/repository --base FULL_BASE_SHA --head FULL_HEAD_SHA \
+  --task /absolute/private/task.json
+```
+
+This clones the local immutable candidate, re-runs credential-free isolated checks,
+then performs one real subscription review under the shared daily budget. It never
+calls GitHub, re-runs Qwen, publishes or creates a mergeable job. Evidence is retained
+under `reviews/`; only `review-approved` exits successfully. A `review-rejected`
+or `awaiting-review` outcome is not approval. A successful local review does not
+attest the remote Issue/PR/CI/merge cycle.
+Use repeatable `--context RELATIVE_PATH` options to include up to ten additional
+files from that same commit's public-source inventory (for example, the source
+under test). They share the 80 KB input limit. No host files or mutable working
+tree content is sent. Without enough evidence the reviewer must request human review.
+
 To run the actual Issue flow, provision credentials, set `enabled` explicitly, and:
 
 ```bash

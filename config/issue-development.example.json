@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "repository": "Ytaihei/free5gc-srv6-mup-lab",
   "trusted_users": ["Ytaihei"],
   "ready_label": "agent:ready",
@@ -8,7 +8,8 @@
   "automatic_merge": false,
   "state_dir": "/absolute/private/issue-development-state",
   "github_token_file": null,
-  "review_api_key_file": null,
+  "review_session_dir": null,
+  "review_included_only_confirmed": false,
   "review_model": null,
   "review_calls_per_day": 1,
   "worker_model": "qwen3.5:9b-16k",

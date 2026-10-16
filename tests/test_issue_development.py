@@ -366,10 +366,53 @@ class IssueTests(unittest.TestCase):
 
     def test_review_budget_reserved_even_if_review_fails(self):
         coordinator, gh = self.coordinator('awaiting-review')
-        self.cfg['review_model'], self.cfg['review_api_key_file'] = 'example-model', '/nonexistent'
+        self.cfg['review_model'], self.cfg['review_session_dir'] = 'example-model', '/nonexistent'
+        self.cfg['review_included_only_confirmed'] = True
         with patch.object(dev, 'review', side_effect=ValueError('failure')):
             coordinator.tick()
         self.assertEqual(coordinator.store.load()['review_calls'][dev.now()[:10]], 1)
+
+    def test_subscription_limit_holds_review_without_publication_or_repeated_calls(self):
+        coordinator, gh = self.coordinator('awaiting-review')
+        state = coordinator.store.load()
+        state['jobs']['21-123']['run'] = 'fixture'
+        (coordinator.store.root / 'runs' / 'fixture').mkdir(parents=True)
+        coordinator.store.save(state)
+        self.cfg.update(review_model='example-model', review_session_dir='/nonexistent',
+                        review_included_only_confirmed=True, review_calls_per_day=10)
+        with patch.object(dev, 'review', side_effect=dev.ReviewBlocked('usage-limit')) as model:
+            coordinator.tick()
+            coordinator.tick()
+        state = coordinator.store.load()
+        self.assertEqual(model.call_count, 1)
+        self.assertEqual(state['jobs']['21-123']['status'], 'awaiting-review')
+        self.assertEqual(state['review_hold']['reason'], 'usage-limit')
+        self.assertEqual(state['review_calls'][dev.now()[:10]], 1)
+        self.assertFalse(gh.writes)
+
+    def test_old_paid_configuration_is_rejected(self):
+        cfg = {**self.cfg, 'version': 1, 'review_api_key_file': '/private/key'}
+        path = self.root / 'old-config.json'
+        path.write_text(json.dumps(cfg))
+        with self.assertRaises(ValueError):
+            dev.load_config(path)
+
+    def test_review_resume_does_not_reset_budget_or_unpause_development(self):
+        coordinator, _ = self.coordinator('awaiting-review')
+        state = coordinator.store.load()
+        state.update(paused=True, review_hold={'reason': 'usage-limit'}, review_calls={dev.now()[:10]: 1})
+        coordinator.store.save(state)
+        path = self.root / 'operator.json'
+        path.write_text(json.dumps(self.cfg))
+        original_umask = os.umask(0o077)
+        try:
+            dev.main(['--config', str(path), 'review-resume'])
+        finally:
+            os.umask(original_umask)
+        after = coordinator.store.load()
+        self.assertNotIn('review_hold', after)
+        self.assertTrue(after['paused'])
+        self.assertEqual(after['review_calls'], state['review_calls'])
 
 
 class WorkerTests(unittest.TestCase):
@@ -521,23 +564,95 @@ class SnapshotTests(unittest.TestCase):
         self.assertIn('tests/test_added.py', inventory['files'])
 
     def test_review_transport_no_tools_and_exact_head_schema(self):
-        key = self.root / 'key'
-        key.write_text('fixture-not-a-real-credential')
-        key.chmod(0o600)
-        self.cfg.update(review_model='configured-review-model', review_api_key_file=str(key))
+        self.cfg.update(review_model='configured-review-model', review_session_dir=str(self.root / 'session'),
+                        review_included_only_confirmed=True)
         result = {'head': self.base, 'approved': True, 'requires_human': False,
                   'summary': 'Fixture only', 'findings': []}
         calls = []
-        def transport(url, body, **kwargs):
-            calls.append((url, body, kwargs))
-            return {'status': 'completed', 'output': [{'type': 'message', 'content': [
-                {'type': 'output_text', 'text': json.dumps(result)}]}]}
+        def transport(body, config):
+            calls.append((body, config))
+            return json.dumps(result)
         job = {'base': self.base, 'head': self.base, 'task': {'goal': 'fixture'}}
         self.assertEqual(dev.review(job, self.repo, self.cfg, transport), result)
-        self.assertEqual(calls[0][0], 'https://api.openai.com/v1/responses')
-        self.assertNotIn('tools', calls[0][1])
-        self.assertFalse(calls[0][1]['store'])
-        self.assertEqual(calls[0][1]['text']['format']['schema'], dev.REVIEW_SCHEMA)
+        body = calls[0][0]
+        self.assertNotIn('tools', body)
+        self.assertNotIn('max_output_tokens', body)
+        self.assertFalse(body['store'])
+        self.assertTrue(body['stream'])
+        self.assertIsInstance(body['input'], list)
+        self.assertEqual(body['text']['format']['schema'], dev.REVIEW_SCHEMA)
+
+    def test_review_sends_head_bound_check_observations_not_private_logs(self):
+        directory = self.root / 'checks'
+        directory.mkdir()
+        for index in range(len(worker.CHECK_COMMANDS)):
+            (directory / f'check-{index}.log').write_text('private fixture log text')
+        evidence = dev.passed_check_evidence(self.base, directory)
+        job = {'base': self.base, 'head': self.base, 'task': {'goal': 'fixture'},
+               'check_evidence': evidence, 'context_paths': ['scripts/example.sh']}
+        result = {'head': self.base, 'approved': False, 'requires_human': True,
+                  'summary': 'fixture', 'findings': []}
+        sent = []
+        def transport(body, config):
+            sent.append(json.loads(body['input'][0]['content']))
+            return json.dumps(result)
+        dev.review(job, self.repo, self.cfg, transport)
+        self.assertEqual(sent[0]['check_evidence']['head'], self.base)
+        self.assertEqual([x['argv'] for x in evidence['commands']], worker.CHECK_COMMANDS)
+        self.assertTrue(all(x['exit_code'] == 0 for x in evidence['commands']))
+        self.assertNotIn('private fixture log text', json.dumps(sent))
+        self.assertIn('scripts/example.sh', sent[0]['additional_context'])
+        evidence['head'] = 'f' * 40
+        with self.assertRaises(ValueError):
+            dev.review(job, self.repo, self.cfg, transport)
+        self.assertEqual(len(sent), 1)
+
+    def test_review_rejects_nonpublic_context_before_transport(self):
+        with patch.object(dev, 'review_text') as transport, self.assertRaises(ValueError):
+            dev.review({'base': self.base, 'head': self.base, 'task': {},
+                        'context_paths': ['private.txt']}, self.repo, self.cfg, transport)
+        transport.assert_not_called()
+
+    def test_local_review_disabled_checks_and_budget_gates(self):
+        self.cfg.update(enabled=False, review_model='fixture-model',
+                        review_session_dir=str(self.root / 'session'), review_included_only_confirmed=True)
+        task = self.root / 'task.json'
+        task.write_text(json.dumps({'goal': 'Fixture', 'paths': ['tests/'], 'acceptance': 'Preserve tests'}))
+        cfg = self.root / 'operator.json'
+        cfg.write_text(json.dumps(self.cfg))
+        argv = ['--config', str(cfg), 'review-local', '--source', str(self.repo),
+                '--base', self.base, '--head', self.base, '--task', str(task)]
+        original_umask = os.umask(0o077)
+        self.addCleanup(os.umask, original_umask)
+        with patch.object(dev, 'checks', return_value=False), \
+                patch.object(dev, 'review') as model, patch.object(dev.GitHub, 'call') as remote, \
+                redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+            dev.main(argv)
+        model.assert_not_called()
+        remote.assert_not_called()
+        store = dev.State(self.cfg['state_dir'])
+        self.assertEqual(store.load()['review_calls'], {})
+        def passing(work, config, evidence):
+            evidence.mkdir()
+            for index in range(len(worker.CHECK_COMMANDS)):
+                (evidence / f'check-{index}.log').write_text('fixture')
+            return True
+        approved = {'head': self.base, 'approved': True, 'requires_human': False,
+                    'summary': 'Fixture only', 'findings': []}
+        with patch.object(dev, 'checks', side_effect=passing), \
+                patch.object(dev, 'review', return_value=approved) as model, \
+                patch.object(dev.GitHub, 'call') as remote, redirect_stdout(io.StringIO()):
+            dev.main(argv)
+            self.assertEqual(model.call_args.args[0]['check_evidence']['head'], self.base)
+            with self.assertRaises(ValueError):
+                dev.main(argv)
+        self.assertEqual(model.call_count, 1)
+        remote.assert_not_called()
+        self.assertEqual(store.load()['review_calls'][dev.now()[:10]], 1)
+        for switch in ('enabled', 'publish', 'automatic_merge'):
+            cfg.write_text(json.dumps({**self.cfg, switch: True}))
+            with self.subTest(switch=switch), self.assertRaises(ValueError):
+                dev.main(argv)
 
     def test_trial_failed_checks_return_failure_without_remote_calls(self):
         task = self.root / 'task.json'
