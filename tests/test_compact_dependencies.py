@@ -82,6 +82,11 @@ class DependencyTests(unittest.TestCase):
             deps.apply(Path('/scratch'), Path('/policy'))
         self.assertEqual(run.call_args_list[0].args[0], ['go', 'get', 'example.com/module@v1.2.3'])
 
+    def test_version_missing_patch_component(self):
+        for bad in ('v1.2', 'v1', 'v'):
+            with self.assertRaises(ValueError):
+                deps.version(bad)
+
     def test_every_external_go_build_applies_floors_after_copy(self):
         for name in ['vinbero', *('free5gc-' + n for n in develop.NF_NAMES)]:
             script = develop.build_script(name)
