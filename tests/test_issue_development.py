@@ -153,6 +153,9 @@ class IssueTests(unittest.TestCase):
     def test_unsafe_state_and_secret_rejected(self):
         target = self.root / 'state'
         target.mkdir(mode=0o755)
+        # The coordinator runs with umask 077; explicitly create the unsafe
+        # permission fixture instead of letting that mask make it safe.
+        target.chmod(0o755)
         with self.assertRaises(ValueError), dev.State(target).locked():
             pass
         token = self.root / 'token'
