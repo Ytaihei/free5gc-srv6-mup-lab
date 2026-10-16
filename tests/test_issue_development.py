@@ -223,12 +223,18 @@ class IssueTests(unittest.TestCase):
                 state['jobs']['queued-fixture'] = {**state['jobs']['21-123'],
                                                   'id': 'queued-fixture', 'status': 'queued'}
                 coordinator.store.save(state)
+                saved_pauses = []
+                original_save = coordinator.store.save
+                def record_save(value):
+                    saved_pauses.append(value['paused'])
+                    original_save(value)
                 with patch.object(coordinator, 'collect') as collect, \
                         patch.object(coordinator, 'develop') as work, \
                         patch.object(coordinator, 'run_review') as review, \
-                        patch.object(coordinator.store, 'save', wraps=coordinator.store.save) as saves:
+                        patch.object(coordinator.store, 'save', side_effect=record_save):
                     coordinator.tick()
-                self.assertTrue(all(call.args[0]['paused'] for call in saves.call_args_list))
+                self.assertTrue(saved_pauses)
+                self.assertTrue(all(saved_pauses))
                 collect.assert_not_called()
                 work.assert_not_called()
                 review.assert_not_called()
