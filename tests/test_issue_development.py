@@ -296,6 +296,43 @@ class IssueTests(unittest.TestCase):
         self.assertEqual(job['status'], 'ready-to-merge')
         self.assertFalse(gh.writes)
 
+    def test_all_change_categories_can_merge_after_independent_approval(self):
+        for name in ['internal/auth/session.go', 'scripts/issue_development.py',
+                     'AGENTS.md', '.github/workflows/ci.yml', 'LICENSE',
+                     'config/versions.lock.yml', 'go.mod', 'tests/test_example.py']:
+            with self.subTest(path=name):
+                coordinator, gh = self.coordinator()
+                self.cfg['publish'] = self.cfg['automatic_merge'] = True
+                state, job = coordinator.store.load(), self.merge_job()
+                job['classification'] = dev.classify_candidate(
+                    [{'path': name, 'added': 2, 'deleted': 1}], dev.load_policy())
+                coordinator.merge(state, job)
+                self.assertEqual(job['status'], 'merged')
+                self.assertEqual(gh.writes[-1][0], '/pulls/25/merge')
+
+    def test_category_policy_preserves_candidate_bounds(self):
+        policy = dev.load_policy()
+        for entries in [[], [{'path': 'internal/auth.go', 'added': 301, 'deleted': 0}],
+                        [{'path': f'internal/file{i}.go', 'added': 1, 'deleted': 0}
+                         for i in range(11)]]:
+            with self.subTest(entries=entries):
+                self.assertFalse(dev.classify_candidate(entries, policy)['eligible'])
+        with self.assertRaises(ValueError):
+            dev.classify_candidate([{'path': '../private', 'added': 1, 'deleted': 0}], policy)
+
+    def test_all_category_policy_does_not_override_review_rejection(self):
+        for review_change in [{'approved': False}, {'requires_human': True},
+                              {'findings': ['Missing security evidence']}]:
+            with self.subTest(review=review_change):
+                coordinator, gh = self.coordinator()
+                self.cfg['publish'] = self.cfg['automatic_merge'] = True
+                state, job = coordinator.store.load(), self.merge_job()
+                job['classification'] = dev.classify_candidate(
+                    [{'path': 'internal/auth.go', 'added': 1, 'deleted': 1}], dev.load_policy())
+                job['review'].update(review_change)
+                coordinator.merge(state, job)
+                self.assertFalse(gh.writes)
+
     def test_merge_requires_matching_head_base_checks_and_scope(self):
         for mutation in ['head', 'base', 'failed-check', 'wrong-app', 'ineligible', 'stale-review']:
             with self.subTest(mutation=mutation):
@@ -556,6 +593,7 @@ class SnapshotTests(unittest.TestCase):
         self.repo.mkdir()
         self.cfg = config(self.root)
         files = {'tests/test_sample.py': 'import unittest\n',
+                 'internal/auth/session.go': 'package auth\nconst Timeout = 10\n',
                  'scripts/example.sh': '#!/bin/sh\nexit 0\n',
                  '.github/workflows/ci.yml': 'name: fixture\n',
                  'config/documentation.json': '{"version": 1, "translations": []}\n'}
@@ -597,6 +635,12 @@ class SnapshotTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             dev.freeze(self.repo, self.work, self.base, ['tests/'], self.cfg)
 
+    def test_runtime_edit_is_eligible_without_legacy_category_gate(self):
+        (self.work / 'internal/auth/session.go').write_text('package auth\nconst Timeout = 20\n')
+        head, classification = dev.freeze(self.repo, self.work, self.base, ['internal/'], self.cfg)
+        self.assertNotEqual(head, self.base)
+        self.assertTrue(classification['eligible'])
+
     def test_only_test_inventory_additions_allowed(self):
         (self.work / 'tests/test_added.py').write_text('import unittest\n')
         head, classification = dev.freeze(self.repo, self.work, self.base, ['tests/'], self.cfg)
@@ -622,6 +666,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertTrue(body['stream'])
         self.assertIsInstance(body['input'], list)
         self.assertEqual(body['text']['format']['schema'], dev.REVIEW_SCHEMA)
+        self.assertIn('Category alone is not a reason to require human review', body['instructions'])
 
     def test_review_sends_head_bound_check_observations_not_private_logs(self):
         directory = self.root / 'checks'

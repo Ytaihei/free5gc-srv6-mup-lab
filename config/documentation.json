@@ -5,15 +5,15 @@
       "source": "docs/background-development.md",
       "translation": "docs/background-development.ja.md",
       "kind": "markdown",
-      "source_sha256": "f55d2c6db73ecd252824e82a1ecf5d6f3ff110b628b854dfae948136e0dfab09",
-      "translation_sha256": "183d836d63339d24cd70d8225c70cacb28ec5599830b2b26aed9ae6765ff91f1"
+      "source_sha256": "67019c0d3f4b5a8c0cdca3b0670623c0771056cdf63752cf1fc23da2e8a74bfa",
+      "translation_sha256": "e57dbcb4cee53042d25c9369d6a50e7703f2b347c155d1815a2c5f8181c98116"
     },
     {
       "source": "AGENTS.md",
       "translation": "AGENTS.ja.md",
       "kind": "markdown",
-      "source_sha256": "c147b36c9e07c2856ee9d2c54cec6cf5aadb35c0236eeb28270838f465a0d6ab",
-      "translation_sha256": "89b76d09a7bc28aa0f9e3a065c8fe8aaddf5ca14c7511ce94693f00aa2bd8550"
+      "source_sha256": "ebbf3e9ec17108ea09bf6832171becb6151ee9b8cab1c3c1a6fb35ca04b039ce",
+      "translation_sha256": "d27517c684b837ffbfadab94e9aa34522caf779d7aefb222ffd80fd84dd6990a"
     },
     {
       "source": "docs/hands-on.md",
@@ -208,8 +208,8 @@
       "source": "docs/issue-development.md",
       "translation": "docs/issue-development.ja.md",
       "kind": "markdown",
-      "source_sha256": "78e1ea190bf6a90c9ed621cd352668a8b5fec28764d1d96a204a6af4eec59b23",
-      "translation_sha256": "3f6065e4d8d2687252f3fe4f5313e6b7b9a380309e69820e4a85b3d642d07516"
+      "source_sha256": "4d24f7296412df937b50d648e2e4115de3d62bc10ea36f4d4198c4b2f77ce6f4",
+      "translation_sha256": "72804f2e21e7fc9e1de4115ccac4a8547de6162425e94bfec91a7265df66a3d1"
     },
     {
       "source": "docs/issue-chatgpt-pilot.md",

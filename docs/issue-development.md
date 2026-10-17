@@ -239,13 +239,28 @@ statuses and PR numbers, never model summaries, raw exceptions or private logs.
 Notification failures retain a pending flag for retry. Local status remains
 authoritative when GitHub cannot be reached.
 
-Automatic merge additionally requires opt-in, the existing conservative background
-classification, a current independent review, an unchanged Issue, identical base
+All PR change categories are eligible for automatic merge, including authentication,
+execution control, runtime code, policy, infrastructure, licenses and dependencies.
+Category alone never requires human approval. The Issue classifier retains the
+10-file/300-line bounds but no longer uses the legacy scheduler's category allowlist.
+Eligibility is not approval: unresolved findings, uncertain compatibility or missing
+required evidence still block merge. The review schema's `requires_human` flag is
+retained for unresolved questions, not mandatory category-based approval.
+
+Automatic merge additionally requires opt-in, a current independent review, an unchanged Issue, identical base
 and head, and successful `test`, `gitleaks`, `source-and-binaries` checks from
 GitHub Actions for that head. Strict required branch checks must be configured;
 the runner does not change protection and never requests an administrator bypass.
-Merge submits the expected head SHA. Runtime/policy/infrastructure changes, uncertain
-dependencies and missing live evidence remain decisions, not automatic merges.
+Merge submits the expected head SHA. Previously rejected receipts are not promoted;
+changed candidates need fresh checks and review. No review/CI gate is bypassed.
+
+This is merge authorization, not broader worker or deployment authority. The bounded
+Qwen worker still cannot edit runner/CI/instruction files or add arbitrary new source
+paths. Such PRs may be prepared through a separately authorized workflow and merged
+by an agent after review/checks, without a category-based human approval step.
+The Issue coordinator only merges its own recorded PRs; it does not scan and merge
+arbitrary external PRs. Service activation, credential use and installation updates
+remain separately authorized. The legacy scheduler is not re-enabled or migrated.
 
 Before enabling unattended publication/merge, verify a real Issue → PR → CI → merge
 cycle, cancellation on edits/label removal, notification delivery, duplicate
