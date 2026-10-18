@@ -57,6 +57,7 @@ def write_json(path, data):
 
 def load_config(path):
     cfg = json.loads(Path(path).read_text())
+    cfg.setdefault('github_auth_user', None)
     example = json.loads((ROOT / 'config/issue-development.example.json').read_text())
     if set(cfg) != set(example) or cfg['version'] != 2 or cfg['repository'] != REPOSITORY:
         raise ValueError('unsupported issue configuration')
@@ -65,6 +66,11 @@ def load_config(path):
             raise ValueError('invalid switch: ' + key)
     if cfg['automatic_merge'] and not cfg['publish']:
         raise ValueError('automatic merge requires publication')
+    account = cfg['github_auth_user']
+    if account is not None and (not isinstance(account, str)
+            or not re.fullmatch(r'[A-Za-z0-9-]{1,39}', account)
+            or cfg['github_token_file'] is not None):
+        raise ValueError('gh authentication requires one explicit account and no token file')
     if (not isinstance(cfg['trusted_users'], list) or not cfg['trusted_users']
             or any(not isinstance(x, str) or not re.fullmatch(r'[A-Za-z0-9-]{1,39}', x)
                    for x in cfg['trusted_users']) or cfg['ready_label'] != 'agent:ready'):
@@ -112,6 +118,44 @@ def secret(path):
     if not value or '\n' in value or '\r' in value:
         raise ValueError('invalid credential')
     return value
+
+
+def github_token(config):
+    """Explicit operator opt-in only; never inherit GH_TOKEN or candidate config."""
+    account = config.get('github_auth_user')
+    if account is None:
+        return secret(config['github_token_file'])
+    if (not isinstance(account, str) or not re.fullmatch(r'[A-Za-z0-9-]{1,39}', account)
+            or config.get('github_token_file') is not None):
+        raise ValueError('invalid gh authentication selection')
+    env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8',
+           'GH_CONFIG_DIR': str(Path.home() / '.config/gh'), 'GH_PROMPT_DISABLED': '1'}
+    # Allow the operator's existing keyring, but no token or config overrides.
+    for key in ('DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'):
+        if key in os.environ:
+            env[key] = os.environ[key]
+    try:
+        result = subprocess.run(['/usr/bin/gh', 'auth', 'token', '--hostname', 'github.com',
+                                 '--user', account], cwd='/', env=env, capture_output=True,
+                                text=True, timeout=15, check=False)
+        value = result.stdout.strip()
+        if result.returncode or not value or len(value) > 8192 or any(c.isspace() for c in value):
+            raise ValueError('gh authentication unavailable')
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError('gh authentication unavailable') from None
+    return value
+
+
+def git_auth_env(config):
+    env = {'GIT_ASKPASS': str(ROOT / 'scripts/issue-git-askpass.py')}
+    if config.get('github_auth_user') is not None:
+        env['ISSUE_GITHUB_AUTH_USER'] = config['github_auth_user']
+        for key in ('DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'):
+            if key in os.environ:
+                env[key] = os.environ[key]
+    else:
+        env['ISSUE_GITHUB_TOKEN_FILE'] = config['github_token_file']
+    return env
 
 
 class State:
@@ -190,7 +234,7 @@ class GitHub:
             raise ValueError('invalid API route')
         request = urllib.request.Request('https://api.github.com/repos/' + REPOSITORY + route,
                   None if data is None else json.dumps(data).encode(),
-                  {'Authorization': 'Bearer ' + secret(self.config['github_token_file']),
+                  {'Authorization': 'Bearer ' + github_token(self.config),
                    'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json',
                    'X-GitHub-Api-Version': '2022-11-28'}, method=method)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
@@ -513,9 +557,8 @@ class Coordinator:
         if sum(p['head']['ref'].startswith('agent/issue-') for p in prs) >= 3:
             return
         self.save(state, job, 'publishing')
-        # Only this trusted Git process gets the token-file path. No shell/candidate hooks.
-        env = {'GIT_ASKPASS': str(ROOT / 'scripts/issue-git-askpass.py'),
-               'ISSUE_GITHUB_TOKEN_FILE': self.config['github_token_file']}
+        # Only trusted Git receives the auth selector, never the token itself.
+        env = git_auth_env(self.config)
         git(repo, '-c', 'credential.helper=', 'push', 'origin', job['head'] + ':refs/heads/' + job['branch'], env=env)
         if not self.unchanged(job):
             self.save(state, job, 'cancelled')

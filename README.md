@@ -22,8 +22,9 @@ For a single-VM setup with component-level customization, start with the
 [prebuilt/development workflow](docs/prebuilt-development.md).
 The source-build path works today; prebuilt distribution remains gated by image review.
 Fresh compact databases require an AVX-capable CPU exposed to the guest;
-Ubuntu 24.04 x86-64 and KVM alone are not sufficient. The current `./lab doctor`
-does not check AVX. See the [database prerequisites](docs/database-migration.md).
+Ubuntu 24.04 x86-64 and KVM alone are not sufficient. `./lab doctor` checks host
+AVX before provisioning; database setup also checks its actual exposure in the guest.
+See the [database prerequisites](docs/database-migration.md).
 
 The opt-in [Issue-driven Qwen workflow](docs/issue-development.md) accepts explicitly
 authorized Issues, isolates checks, and gates PR publication and merging on

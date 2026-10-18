@@ -92,6 +92,63 @@ class IssueTests(unittest.TestCase):
         self.assertFalse(cfg['publish'])
         self.assertFalse(cfg['automatic_merge'])
         self.assertIsNone(cfg['review_model'])
+        self.assertIsNone(cfg['github_auth_user'])
+
+    def test_existing_v2_config_keeps_token_file_mode(self):
+        cfg = dict(self.cfg)
+        cfg.pop('github_auth_user')
+        path = self.root / 'config.json'
+        path.write_text(json.dumps(cfg))
+        self.assertIsNone(dev.load_config(path)['github_auth_user'])
+
+    def test_gh_auth_requires_exclusive_explicit_account(self):
+        for user, token in [('', None), ('bad/name', None), (False, None), ('Ytaihei', '/private/token')]:
+            with self.subTest(user=user, token=token):
+                path = self.root / 'config.json'
+                path.write_text(json.dumps({**self.cfg, 'github_auth_user': user, 'github_token_file': token}))
+                with self.assertRaises(ValueError):
+                    dev.load_config(path)
+
+    def test_gh_auth_uses_fixed_host_account_and_clean_environment(self):
+        cfg = {**self.cfg, 'github_auth_user': 'Ytaihei', 'github_token_file': None}
+        result = subprocess.CompletedProcess([], 0, 'private-token\n', '')
+        with patch.dict(os.environ, {'GH_TOKEN': 'wrong', 'GITHUB_TOKEN': 'wrong',
+                                     'GH_CONFIG_DIR': '/candidate/config'}), \
+             patch.object(dev.subprocess, 'run', return_value=result) as run:
+            self.assertEqual(dev.github_token(cfg), 'private-token')
+        args, kwargs = run.call_args
+        self.assertEqual(args[0], ['/usr/bin/gh', 'auth', 'token', '--hostname', 'github.com', '--user', 'Ytaihei'])
+        self.assertEqual(kwargs['cwd'], '/')
+        self.assertEqual(kwargs['env']['GH_CONFIG_DIR'], str(Path.home() / '.config/gh'))
+        self.assertNotIn('GH_TOKEN', kwargs['env'])
+        self.assertNotIn('GITHUB_TOKEN', kwargs['env'])
+        self.assertEqual(kwargs['timeout'], 15)
+        env = dev.git_auth_env(cfg)
+        self.assertEqual(env['ISSUE_GITHUB_AUTH_USER'], 'Ytaihei')
+        self.assertNotIn('ISSUE_GITHUB_TOKEN_FILE', env)
+        self.assertNotIn('private-token', str(env))
+
+    def test_gh_auth_failure_never_falls_back_or_discloses_output(self):
+        cfg = {**self.cfg, 'github_auth_user': 'Ytaihei', 'github_token_file': None}
+        for result in [subprocess.CompletedProcess([], 1, 'secret', 'secret'),
+                       subprocess.CompletedProcess([], 0, '', ''),
+                       subprocess.CompletedProcess([], 0, 'token\nother', ''),
+                       subprocess.CompletedProcess([], 0, 'x' * 8193, '')]:
+            with patch.object(dev.subprocess, 'run', return_value=result), \
+                 patch.object(dev, 'secret') as secret, \
+                 self.assertRaisesRegex(ValueError, '^gh authentication unavailable$'):
+                dev.github_token(cfg)
+            secret.assert_not_called()
+        with patch.object(dev.subprocess, 'run', side_effect=subprocess.TimeoutExpired('secret', 15)), \
+             self.assertRaisesRegex(ValueError, '^gh authentication unavailable$'):
+            dev.github_token(cfg)
+
+    def test_token_file_mode_does_not_invoke_gh(self):
+        with patch.object(dev, 'secret', return_value='token') as secret, \
+             patch.object(dev.subprocess, 'run') as run:
+            self.assertEqual(dev.github_token(self.cfg), 'token')
+        secret.assert_called_once_with(self.cfg['github_token_file'])
+        run.assert_not_called()
 
     def test_config_rejects_unknown_keys_and_broad_state(self):
         for change in [{'surprise': True}, {'state_dir': '/'}, {'state_dir': str(Path.home())},
