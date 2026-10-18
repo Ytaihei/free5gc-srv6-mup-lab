@@ -22,16 +22,21 @@ For unattended runs, execute `make check`, `make lint`, the Ansible syntax check
 and secret checks in the credential-free checking environment. Runtime evidence requires separate,
 explicit lab operations and must remain private unless reviewed for release.
 
-Bounded prose fixes, additive tests of existing behavior and compatible updates
-of existing stable Go dependencies (including compact build floors) are candidates
-for automatic merging after independent immutable review and all required CI.
-Follow the dependency criteria in the background guide: no major upgrade,
-downgrade, new module/source, toolchain change, license exception or scanner bypass;
-uncertain compatibility or required live validation still needs human review.
-This policy does not enable the installed automatic-merge switch or deploy updates.
-Runtime code, policy, infrastructure, licenses, executable
-examples, standards/validation claims and these instructions require human review.
-Do not weaken checks, delete tests or bypass branch protection.
+All PR change categories are eligible for agent-managed automatic merging after
+independent review of the immutable candidate and all required checks. This includes
+runtime code, authentication, execution control, policy, infrastructure, dependencies,
+licenses, executable examples, standards/validation claims and these instructions.
+Do not require a human approval solely because of the change category. Dependency
+compatibility, licensing, security, test adequacy and claimed evidence still need
+substantive review; unresolved findings or missing required evidence block merge.
+Do not weaken checks, remove tests to conceal failures or bypass branch protection.
+
+Merge authorization is not permission to execute arbitrary Issues, deploy changes,
+use credentials, enable services, publish images or self-update the installed runner.
+Keep each worker's allowed paths and resource limits. The Issue coordinator still
+requires its own immutable receipts; this policy does not add intake of arbitrary
+external PRs or enable private operation switches. The legacy scheduler retains its
+old classifier for compatibility and must not be restarted to enact this policy.
 
 ## Background operations
 

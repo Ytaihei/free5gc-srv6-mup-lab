@@ -4,6 +4,13 @@ English | [日本語](background-development.ja.md)
 
 ## Status and boundaries
 
+This guide describes the legacy scheduler and its historical category-restricted
+merge gate, not the current repository-wide authorization. The current
+[Issue workflow](issue-development.md#publication-and-merge-gates) permits all PR
+change categories after independent review and required checks. The legacy classifier
+and installed copies are not migrated by that policy change; do not restart the old
+timers to apply it. Credential use, deployment and service activation remain separate.
+
 The repository provides a paused, opt-in coordinator, task queue, isolated
 worker/checker/publisher execution, immutable PR receipts and a conservative
 merge gate. This is a server-side systemd job, not an app Scheduled task.
