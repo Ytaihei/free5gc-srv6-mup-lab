@@ -710,12 +710,24 @@ class WorkerTests(unittest.TestCase):
         response = {'done': True, 'message': {'role': 'assistant', 'content': ''}}
         def transport(url, data, **kwargs):
             self.assertFalse(data['think'])
+            self.assertEqual(data['keep_alive'], 300)
+            self.assertLessEqual(kwargs['seconds'], self.cfg['worker_seconds'])
             self.assertEqual({t['function']['name'] for t in data['tools']},
                              {'read_file', 'apply_patch', 'run_tests'})
             return response
         with self.assertRaises(ValueError):
             worker.worker(self.work, self.cfg, {'paths': ['tests/']}, self.root / 'evidence',
                           transport=transport)
+
+    def test_worker_records_only_nonnegative_integer_durations(self):
+        response = {'done': True, 'message': {'role': 'assistant', 'content': 'No tests.'},
+                    'total_duration': 300, 'load_duration': 0,
+                    'prompt_eval_duration': -1, 'eval_duration': 'unexpected text'}
+        with self.assertRaises(ValueError):
+            worker.worker(self.work, self.cfg, {'paths': ['tests/']}, self.root / 'evidence',
+                          transport=lambda *a, **kw: response)
+        metadata = json.loads((self.root / 'evidence/worker.jsonl').read_text().splitlines()[0])
+        self.assertEqual(metadata['timings_ns'], {'total_duration': 300, 'load_duration': 0})
 
 
 class SnapshotTests(unittest.TestCase):

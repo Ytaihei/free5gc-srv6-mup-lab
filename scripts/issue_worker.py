@@ -261,7 +261,10 @@ def worker(work, config, task, evidence, feedback=None, transport=post_json):
                 'model': config['worker_model'], 'messages': messages, 'tools': TOOLS,
                 # Bounded tool mode: thinking can consume the entire output
                 # budget and yield an empty final response on the 16K model.
-                'stream': False, 'think': False, 'keep_alive': 0,
+                # Keep the runner available between tool turns instead of
+                # unloading it and discarding its prompt cache on every reply.
+                # This is a finite idle TTL, not an extension of the job budget.
+                'stream': False, 'think': False, 'keep_alive': 300,
                 'options': {'num_ctx': 16384, 'num_predict': 4096, 'temperature': 0.2}},
                 seconds=min(remaining, 180))
             if response.get('error') or response.get('done') is not True:
@@ -269,7 +272,10 @@ def worker(work, config, task, evidence, feedback=None, transport=post_json):
             log.write(json.dumps({'type': 'response_metadata',
                        'done_reason': response.get('done_reason'),
                        'prompt_eval_count': response.get('prompt_eval_count'),
-                       'eval_count': response.get('eval_count')}) + '\n')
+                       'eval_count': response.get('eval_count'),
+                       'timings_ns': {key: response[key] for key in (
+                           'total_duration', 'load_duration', 'prompt_eval_duration', 'eval_duration')
+                           if type(response.get(key)) is int and response[key] >= 0}}) + '\n')
             message = response.get('message', {})
             if message.get('role') != 'assistant':
                 raise ValueError('invalid worker message')

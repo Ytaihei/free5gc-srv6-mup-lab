@@ -70,6 +70,14 @@ Model requests are limited to 16K context, 4,096 generated tokens per request,
 candidate size, daily job count and pending candidates. There is no model fallback
 or automatic model download. A model's success statement is not acceptance.
 
+Requests use a finite 300-second Ollama `keep_alive` idle TTL so tool turns can
+reuse a loaded runner and its prompt cache instead of unloading after every reply.
+This does not extend the job deadline or guarantee cache reuse on every backend.
+The model may remain in memory for up to five idle minutes after the last request;
+the adapter does not force-unload a model that another local client might use.
+Available nonnegative integer load, prompt-evaluation, generation and total
+durations (nanoseconds) are recorded in private response metadata for diagnosis.
+
 Tests run without network or credentials in bubblewrap, using a temporary copy of
 the candidate, read-only toolchains/caches and no host home, Docker/libvirt socket
 or lab state. No sandbox failure triggers an unsandboxed fallback. The worker's
