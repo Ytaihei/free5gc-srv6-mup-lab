@@ -57,6 +57,19 @@ class ReproducibilityTests(unittest.TestCase):
                 with self.subTest(role=role, task=task['name']):
                     self.assertEqual(task.get('environment', {}).get('GOTOOLCHAIN'), 'local')
 
+    def test_ansible_license_record_matches_exact_development_pin(self):
+        version = next(line.split('==')[1] for line in
+                       (ROOT / 'requirements-dev.txt').read_text().splitlines()
+                       if line.startswith('ansible-core=='))
+        policy = yaml.safe_load((ROOT / 'config/supply-chain-policy.yml').read_text())
+        for field in ('license_metadata', 'license_exceptions'):
+            entries = [entry for entry in policy[field] if entry['name'] == 'ansible-core']
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]['version'], version)
+            self.assertEqual(entries[0]['licenses'], ['GPL-3.0-or-later'])
+        record = next(entry for entry in policy['license_metadata'] if entry['name'] == 'ansible-core')
+        self.assertEqual(record['source'], f'https://pypi.org/pypi/ansible-core/{version}/json')
+
     def test_mixed_gobgp_baseline_is_explicit(self):
         module = (ROOT / 'go.mod').read_text()
         patch = (ROOT / 'third_party/vinbero/patches/0001-gobgp-v4.8-mup-draft01.patch').read_text()

@@ -8,6 +8,7 @@
   "automatic_merge": false,
   "state_dir": "/absolute/private/issue-development-state",
   "github_token_file": null,
+  "github_auth_user": null,
   "review_session_dir": null,
   "review_included_only_confirmed": false,
   "review_model": null,
