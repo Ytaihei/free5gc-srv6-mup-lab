@@ -56,6 +56,13 @@ replacement), and `run_tests`. It does not give the model a shell, GitHub token 
 arbitrary command execution. This is a small tool loop, not a launch of the full
 Codex CLI used in the earlier feasibility experiment.
 
+`read_file` returns complete lines plus `start_line`, `end_line`, `total_lines`
+and `next_start_line` metadata. Optional `start_line` is one-based; `max_lines`
+defaults to 40 and accepts 1–120. Each page contains at most 4,000 UTF-8 bytes of
+file text. Read only relevant sections instead of loading whole paired guides.
+The continuation is `null` at EOF; an oversized single line is refused, not
+silently truncated. The existing total prompt and execution budgets still apply.
+
 The adapter disables thinking output to avoid empty completions when reasoning
 alone consumes the output budget. Response counts/reasons remain in private logs.
 Model requests are limited to 16K context, 4,096 generated tokens per request,
