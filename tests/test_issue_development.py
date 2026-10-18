@@ -560,6 +560,77 @@ class WorkerTests(unittest.TestCase):
         (self.work / 'tests/test_sample.py').write_text('old value\n')
         self.cfg = config(self.root)
 
+    def test_read_pages_preserve_lines_and_report_continuation(self):
+        text = ''.join(f'line {n}\n' for n in range(95)) + 'last without newline'
+        (self.work / 'tests/test_sample.py').write_text(text)
+        first = json.loads(worker.read_page(self.work, 'tests/test_sample.py'))
+        self.assertEqual((first['start_line'], first['end_line'], first['total_lines']), (1, 40, 96))
+        self.assertEqual(first['next_start_line'], 41)
+        second = json.loads(worker.read_page(self.work, 'tests/test_sample.py', 41, 40))
+        last = json.loads(worker.read_page(self.work, 'tests/test_sample.py', 81, 120))
+        self.assertEqual(second['next_start_line'], 81)
+        self.assertIsNone(last['next_start_line'])
+        self.assertEqual(first['content'] + second['content'] + last['content'], text)
+
+    def test_read_page_bounds_utf8_bytes_not_characters(self):
+        line = '日' * 100 + '\n'
+        (self.work / 'tests/test_sample.py').write_text(line * 40)
+        page = json.loads(worker.read_page(self.work, 'tests/test_sample.py', max_lines=120))
+        self.assertLessEqual(len(page['content'].encode('utf-8')), worker.READ_BYTES)
+        self.assertEqual(page['content'], line * 13)
+        self.assertEqual(page['next_start_line'], 14)
+
+    def test_read_page_empty_file_and_oversized_line(self):
+        path = self.work / 'tests/test_sample.py'
+        path.write_text('')
+        page = json.loads(worker.read_page(self.work, 'tests/test_sample.py'))
+        self.assertEqual(page, {'start_line': 1, 'end_line': 0, 'total_lines': 0,
+                                'next_start_line': None, 'content': ''})
+        path.write_text('x' * worker.READ_BYTES)
+        self.assertEqual(len(json.loads(worker.read_page(self.work, 'tests/test_sample.py'))['content']),
+                         worker.READ_BYTES)
+        path.write_text('short\n' + 'x' * (worker.READ_BYTES + 1))
+        self.assertEqual(json.loads(worker.read_page(self.work, 'tests/test_sample.py'))['next_start_line'], 2)
+        with self.assertRaisesRegex(ValueError, 'single line'):
+            worker.read_page(self.work, 'tests/test_sample.py', 2)
+
+    def test_read_page_rejects_invalid_ranges_and_paths(self):
+        for start, count in [(0, 40), (-1, 40), (True, 40), (1.0, 40), ('1', 40),
+                             (2, 40), (1, 0), (1, 121), (1, True), (1, 1.5), (1, '40')]:
+            with self.subTest(start=start, count=count), self.assertRaises(ValueError):
+                worker.read_page(self.work, 'tests/test_sample.py', start, count)
+        (self.work / 'tests/link.py').symlink_to(self.root / 'private')
+        os.link(self.work / 'tests/test_sample.py', self.work / 'tests/hard.py')
+        for name in ['../secret', '/etc/passwd', '.git/config', 'tests/link.py', 'tests/hard.py']:
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                worker.read_page(self.work, name)
+
+    def test_long_paired_documents_do_not_exhaust_prompt_on_first_reads(self):
+        names = ['guide.md', 'guide.ja.md', 'glossary.md', 'glossary.ja.md']
+        for name in names:
+            (self.work / 'tests' / name).write_text(('日英の長い文書' * 20 + '\n') * 200)
+        calls = [{'function': {'name': 'read_file', 'arguments': {'path': 'tests/' + name}}}
+                 for name in names]
+        requests = []
+        def transport(url, data, **kwargs):
+            requests.append(len(json.dumps(data['messages'])))
+            if len(requests) == 1:
+                response_calls = calls
+            elif len(requests) == 2:
+                self.assertLess(requests[-1], 60000)
+                response_calls = [{'function': {'name': 'run_tests', 'arguments': {}}}]
+            else:
+                return {'done': True, 'message': {'role': 'assistant', 'content': 'Tests observed.'}}
+            return {'done': True, 'message': {'role': 'assistant', 'tool_calls': response_calls}}
+        def fake_check(work, cfg, argv, log, seconds):
+            log.write_text('OK\n')
+            return 0
+        with patch.object(worker, 'isolated', side_effect=fake_check):
+            result = worker.worker(self.work, self.cfg, {'paths': ['tests/']}, self.root / 'evidence',
+                                   transport=transport)
+        self.assertEqual(result, 'Tests observed.')
+        self.assertEqual(len(requests), 3)
+
     def test_patch_scope_and_unique_match(self):
         worker.edit(self.work, ['tests/'], 'tests/test_sample.py', 'old', 'new')
         self.assertEqual((self.work / 'tests/test_sample.py').read_text(), 'new value\n')
@@ -597,6 +668,8 @@ class WorkerTests(unittest.TestCase):
                     **({'tool_calls': calls} if calls else {})}}
         responses = iter([
             response([{'function': {'name': 'read_file', 'arguments': {'path': 'tests/test_sample.py'}}}]),
+            response([{'function': {'name': 'read_file', 'arguments': {'path': 'tests/test_sample.py',
+                                                                     'start_line': 1, 'max_lines': 1}}}]),
             response([{'function': {'name': 'apply_patch', 'arguments': {'path': 'tests/test_sample.py',
                                                                           'old': 'old', 'new': 'new'}}}]),
             response([{'function': {'name': 'run_tests', 'arguments': {}}}]),
@@ -609,6 +682,10 @@ class WorkerTests(unittest.TestCase):
                                    transport=lambda *a, **kw: next(responses))
         self.assertIn('Done', result)
         self.assertEqual((self.work / 'tests/test_sample.py').read_text(), 'new value\n')
+        log = [json.loads(line) for line in (self.root / 'evidence/worker.jsonl').read_text().splitlines()]
+        reads = [json.loads(item['result']) for item in log if item.get('tool') == 'read_file']
+        self.assertEqual(len(reads), 2)
+        self.assertTrue(all(page['content'] == 'old value\n' for page in reads))
 
     def test_execution_limits_accommodate_existing_boundary_tests(self):
         with patch.object(worker.resource, 'setrlimit') as limit:
