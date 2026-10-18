@@ -5,15 +5,15 @@
       "source": "docs/background-development.md",
       "translation": "docs/background-development.ja.md",
       "kind": "markdown",
-      "source_sha256": "c09297ddc876b810e8bb57b863f1fdf2cd9b8ee7ab9b4498df68d85f7f90b1ed",
-      "translation_sha256": "893c487bd633fafa6761cefd845257a78eb26153b4690325bf5cb8995fa79d17"
+      "source_sha256": "67019c0d3f4b5a8c0cdca3b0670623c0771056cdf63752cf1fc23da2e8a74bfa",
+      "translation_sha256": "e57dbcb4cee53042d25c9369d6a50e7703f2b347c155d1815a2c5f8181c98116"
     },
     {
       "source": "AGENTS.md",
       "translation": "AGENTS.ja.md",
       "kind": "markdown",
-      "source_sha256": "94773c4757a86ec2291857bc6150bf898a96e3d48e79e36ec39b80d527e90c0e",
-      "translation_sha256": "c394dda9eb29f80daccb72a4315c5f1c147f5ee687dcf16b14d5788c93295589"
+      "source_sha256": "ebbf3e9ec17108ea09bf6832171becb6151ee9b8cab1c3c1a6fb35ca04b039ce",
+      "translation_sha256": "d27517c684b837ffbfadab94e9aa34522caf779d7aefb222ffd80fd84dd6990a"
     },
     {
       "source": "docs/hands-on.md",
@@ -40,8 +40,8 @@
       "source": "docs/image-distribution.md",
       "translation": "docs/image-distribution.ja.md",
       "kind": "markdown",
-      "source_sha256": "0e17a1c9b1e2baacbf1f1dd270d019b73d11fe25a25bf2a504378655dd308841",
-      "translation_sha256": "6061b8bfcbb067849c7c44b51950a61bd6f2fa33d6ee822a3fe80705c5a3b2fe"
+      "source_sha256": "ffcbea7457bf966b275b848e819009ce22eb2b48297b04bf017a735c2448f61a",
+      "translation_sha256": "a671503443e21e2e504dd27b6b94f285eb9d120d9b04d42bf9200bbdc2237124"
     },
     {
       "source": "docs/compact-lab.md",
@@ -68,8 +68,8 @@
       "source": "README.md",
       "translation": "README.ja.md",
       "kind": "markdown",
-      "source_sha256": "21972cf11db67854bf39cc4202fe5978846f899ff827fe281edf115df5127b01",
-      "translation_sha256": "e680446dcd7d9b5c1db2e3bffabb3732ff66b2fa7cde4f7f5bfe2e44b65317a9"
+      "source_sha256": "c40fd15af4b71734f7def248b5cb676bf425a6f3e1f5c3ec6d7a1e54eebebaf0",
+      "translation_sha256": "0b5dd122bc7edb51555e37f494c7e808962fd358f7f0e6a9dc0fcccb0239b631"
     },
     {
       "source": "SECURITY.md",
@@ -145,8 +145,8 @@
       "source": "docs/supply-chain.md",
       "translation": "docs/supply-chain.ja.md",
       "kind": "markdown",
-      "source_sha256": "d67205970b8557f1cbbcc9043529cfbfbb4f4ea98215db57025372539fb2509b",
-      "translation_sha256": "d09b7f2c64668e43fde3627d0f6514dd1b4a0c6a9342bf24bd46c81fcdc9915f"
+      "source_sha256": "677275ef2f11692a32783f2f2ddcf6c3bcd7bc3dce6fccfdde82f08112ce2cdf",
+      "translation_sha256": "e57285511c92abf89200ad02c8e0f37cbe698f74cb1f02649329e0c389f45df7"
     },
     {
       "source": "docs/validation-summary.md",
@@ -203,6 +203,20 @@
       "kind": "markdown",
       "source_sha256": "ac2ed088eb9d561a9f714fa7fe3a4da1e89ce6eb566fca20010a092f09786d84",
       "translation_sha256": "a0ecd19437b46eeb226edc05812fa4a7b8cc1657bbbe54fc044fa6880efdc205"
+    },
+    {
+      "source": "docs/issue-development.md",
+      "translation": "docs/issue-development.ja.md",
+      "kind": "markdown",
+      "source_sha256": "4d24f7296412df937b50d648e2e4115de3d62bc10ea36f4d4198c4b2f77ce6f4",
+      "translation_sha256": "72804f2e21e7fc9e1de4115ccac4a8547de6162425e94bfec91a7265df66a3d1"
+    },
+    {
+      "source": "docs/issue-chatgpt-pilot.md",
+      "translation": "docs/issue-chatgpt-pilot.ja.md",
+      "kind": "markdown",
+      "source_sha256": "c5612fa547bdd1e162b2ca4f21ca74a2a53a9645176d9b20b0b29349f7d53347",
+      "translation_sha256": "e6c00766a9792cc9a2efa1e0f60605b348c1e845b9ecbbaa9c2b4833dd5e0d06"
     }
   ]
 }

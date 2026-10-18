@@ -4,6 +4,13 @@ English | [日本語](background-development.ja.md)
 
 ## Status and boundaries
 
+This guide describes the legacy scheduler and its historical category-restricted
+merge gate, not the current repository-wide authorization. The current
+[Issue workflow](issue-development.md#publication-and-merge-gates) permits all PR
+change categories after independent review and required checks. The legacy classifier
+and installed copies are not migrated by that policy change; do not restart the old
+timers to apply it. Credential use, deployment and service activation remain separate.
+
 The repository provides a paused, opt-in coordinator, task queue, isolated
 worker/checker/publisher execution, immutable PR receipts and a conservative
 merge gate. This is a server-side systemd job, not an app Scheduled task.
@@ -538,12 +545,54 @@ mode do not substitute for an actual isolated trial on the installed host.
 
 ## Merge rules and remaining acceptance
 
-Only small README/glossary prose changes and strictly additive unit tests of
-existing behavior can pass the first automatic gate. Other document changes,
-test edits/deletions, runtime changes, dependencies, policy, licenses, executable
+Small README/glossary prose changes, strictly additive unit tests of existing
+behavior and bounded compatible dependency updates can pass the automatic gate.
+Other document changes, test edits/deletions, runtime changes, policy, licenses, executable
 examples and claims of standard compliance or successful validation require a
 human decision. Public inventory additions are limited to new test files; paired
 documentation hashes are mechanically regenerated, never treated as review.
+
+Dependency eligibility covers `go.mod`, its `go.sum` and existing `modules` floors
+in `config/compact-dependencies.json`. Only stable, non-decreasing versions within
+the same major line qualify, including v0 minor updates if independently reviewed
+as compatible. Module identities, Go/toolchain directives, replacements/exclusions,
+license pins and scanner rules cannot change. The deterministic gate checks frozen
+base/head blobs; filenames or worker assertions alone do not authorize an update.
+Unchanged module versions must retain their checksums. Checksum-only changes,
+new dependencies, prereleases, major upgrades and toolchain/OS/DB/image updates
+are not unattended candidates. Existing pseudo-version dependencies may remain
+unchanged but cannot be updated by this gate.
+
+The independent review must establish compatibility from upstream change evidence,
+affected call paths, resolved module/checksum consistency and regression coverage;
+CI success alone is insufficient. Missing evidence, unresolved licensing or required
+live validation requests a human decision. Paired supply-chain/image-distribution
+documents may explain a qualifying dependency update without changing commands,
+safety guidance or historical results. Additive tests remain allowed; the existing
+10-file/300-line limits, isolation and required CI all remain in force.
+
+`dependency-triage` may now prepare such updates, not just recommendations. This
+does not authorize merging arbitrary Dependabot/contributor PRs: unattended merges
+still require coordinator-owned immutable receipts. Old receipts are not promoted.
+This source policy neither enables `automatic_merge` nor changes timers or running
+lab binaries. Existing installations retain their old policy until an explicit
+reviewed installation update and recommissioning. The ordinary `--update-coordinator`
+repair still refuses policy/AGENTS changes. For this specific transition, stop and
+disable both timers and stop all background/test services as described above, then run:
+
+```bash
+sudo python3 scripts/install-background-development.py --apply --update-coordinator --dependency-policy
+sudo /opt/srv6-mup-background/venv/bin/python3 \
+  /opt/srv6-mup-background/scripts/background-admin.py commission \
+  --author-name 'Your Name' --author-email 'you@example.org'
+```
+
+The opt-in accepts only the exact SHA-256-pinned policy, instructions, classifier
+and x/net dependency-fix files. It does not accept arbitrary policy/dependency edits
+or tool-repair options. Existing manifests are verified before writes; private
+backups, authentication, task receipts and tools are retained. It leaves the queue
+paused and automatic merging off. Commissioning, resume and any decision to enable
+automatic merging remain separate; this is not an authorization for worker self-updates.
 
 The gate requires an immutable separate review, all local checks and successful
 GitHub checks named `test`, `gitleaks` and `source-and-binaries` from GitHub Actions

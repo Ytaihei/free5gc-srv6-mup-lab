@@ -1102,6 +1102,45 @@ class CoordinatorUpdateTests(unittest.TestCase):
             pins[name] = bg.digest(path)
         return package, pins
 
+    def test_explicit_dependency_policy_transition_preserves_state_and_requires_recommission(self):
+        name = 'config/background-development.yml'
+        (self.source / name).write_text('approved dependency policy\n')
+        pins = {name: bg.digest(self.source / name)}
+        with patch.object(installer, 'DEPENDENCY_POLICY_REPAIR_HASHES', pins):
+            with self.assertRaisesRegex(ValueError, 'cannot change policy'):
+                installer.update_coordinator()
+            installer.update_coordinator(dependency_policy=True)
+            installer.update_coordinator(dependency_policy=True)
+        self.assertEqual((self.install / name).read_text(), 'approved dependency policy\n')
+        self.assertTrue(self.store.read()['paused'])
+        self.assertEqual(self.store.read()['tasks'], {'example': {'status': 'queued'}})
+        operator = json.loads((self.install / 'operator.json').read_text())
+        self.assertFalse(operator['automatic_merge'])
+        self.assertFalse(operator['commissioned'])
+        backup = next((self.store.directory / 'updates').glob('*/installation.json')).parent
+        self.assertEqual((backup / name).read_text(), 'unchanged policy\n')
+
+    def test_dependency_policy_pins_reject_tamper_missing_files_and_tool_combinations(self):
+        name = 'config/background-development.yml'
+        with patch.object(installer, 'DEPENDENCY_POLICY_REPAIR_HASHES', {name: '0' * 64}):
+            with self.assertRaisesRegex(ValueError, 'pinned reviewed bytes'):
+                installer.update_coordinator(dependency_policy=True)
+        with self.assertRaisesRegex(ValueError, 'complete pinned inventory'):
+            installer.update_coordinator(dependency_policy=True)
+        for option in ({'go_archive': Path('/not-used')}, {'codex_package': Path('/not-used')}):
+            with self.assertRaisesRegex(ValueError, 'cannot be combined'):
+                installer.update_coordinator(dependency_policy=True, **option)
+        self.assertFalse((self.store.directory / 'updates').exists())
+        self.assertTrue(json.loads((self.install / 'operator.json').read_text())['commissioned'])
+
+    def test_dependency_policy_transition_pins_are_bounded(self):
+        inventory = json.loads((ROOT / 'config/public-source.json').read_text())['files']
+        self.assertIn('config/background-development.yml', installer.DEPENDENCY_POLICY_REPAIR_HASHES)
+        for name, expected in installer.DEPENDENCY_POLICY_REPAIR_HASHES.items():
+            self.assertIn(name, inventory)
+            self.assertNotIn(name, installer.COORDINATOR_UPDATE_PATHS)
+            self.assertRegex(expected, r'^[0-9a-f]{64}$')
+
     def test_explicit_package_repair_adds_only_pinned_companions_and_retains_main_tool(self):
         package, pins = self.package_fixture()
         original = (self.install / 'bin/codex').read_bytes()
@@ -1588,6 +1627,112 @@ class BackgroundPolicyTests(unittest.TestCase):
                                      '--state', self.directory, action], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('installed coordinator', result.stderr)
+
+
+class DependencyEligibilityTests(unittest.TestCase):
+    def setUp(self):
+        self.policy = bg.load_policy()
+        self.base, self.head = 'b' * 40, 'a' * 40
+        self.mod = 'module example.invalid/lab\n\ngo 1.26.9\n\nrequire (\n\texample.invalid/lib v0.58.0 // indirect\n)\n'
+        self.old = {'go.mod': self.mod, 'go.sum': 'example.invalid/lib v0.58.0 h1:' + 'A' * 43 + '=\n',
+                    'config/compact-dependencies.json': json.dumps({
+                        'schema_version': 1, 'reviewed': '2026-10-09',
+                        'modules': {'example.invalid/lib': 'v0.58.0'}, 'license_pins': {}})}
+        self.new = dict(self.old)
+        self.new['go.mod'] = self.mod.replace('v0.58.0', 'v0.60.0')
+
+    def classify(self, extra=()):
+        names = {name for name in self.old if self.old[name] != self.new[name]} | set(extra)
+        entries = [{'path': name, 'added': 1, 'deleted': 1} for name in names]
+        def read(repo, action, ref):
+            self.assertEqual(action, 'show')
+            commit, name = ref.split(':', 1)
+            return (self.old if commit == self.base else self.new)[name]
+        with patch.object(bg, 'git', side_effect=read):
+            return bg.classify(entries, self.policy, Path('/candidate'), self.base, self.head)
+
+    def test_stable_update_and_explanatory_pair_qualify(self):
+        self.new['go.sum'] = self.old['go.sum'].replace('v0.58.0', 'v0.60.0')
+        self.assertTrue(self.classify(bg.DEPENDENCY_DOCS)['eligible'])
+        self.assertFalse(bg.classify([{'path': 'docs/supply-chain.md', 'added': 1,
+                                      'deleted': 0}], self.policy)['eligible'])
+
+    def test_versions_fail_closed(self):
+        for version in ('v0.57.9', 'v1.0.0', 'v0.61.0-rc1', 'v0.61.0+incompatible',
+                        'v0.61.0-20260101000000-123456789abc', 'v00.60.0'):
+            with self.subTest(version=version):
+                self.new['go.mod'] = self.mod.replace('v0.58.0', version)
+                self.assertFalse(self.classify()['eligible'])
+
+    def test_module_toolchain_directive_and_source_changes_fail_closed(self):
+        for change in (self.mod.replace('example.invalid/lib', 'other.invalid/lib'),
+                       self.mod.replace('1.26.9', '1.27.0'),
+                       self.mod + 'toolchain go1.27.0\n',
+                       self.mod + 'replace example.invalid/lib => ../local\n',
+                       self.mod.replace(' // indirect', ''),
+                       self.mod.replace(')\n', '\texample.invalid/new v1.0.0\n)\n')):
+            with self.subTest(change=change):
+                self.new['go.mod'] = change
+                self.assertFalse(self.classify()['eligible'])
+        for directive in ('exclude', 'replace'):
+            self.old['go.mod'] = self.mod.replace('require (', directive + ' (')
+            self.new['go.mod'] = self.old['go.mod'].replace('v0.58.0', 'v0.60.0')
+            self.assertFalse(self.classify()['eligible'])
+
+    def test_floor_update_but_not_license_pin_or_new_floor(self):
+        self.new['go.mod'] = self.mod
+        floor = json.loads(self.old['config/compact-dependencies.json'])
+        floor['modules']['example.invalid/lib'] = 'v0.60.0'
+        floor['reviewed'] = '2026-10-10'
+        self.new['config/compact-dependencies.json'] = json.dumps(floor)
+        self.assertTrue(self.classify()['eligible'])
+        for key, value in (('modules', {'other.invalid/lib': 'v0.60.0'}),
+                           ('license_pins', {'unreviewed': 'v1.0.0'}),
+                           ('reviewed', '2026-99-99'), ('schema_version', 2)):
+            altered = dict(floor, **{key: value})
+            self.new['config/compact-dependencies.json'] = json.dumps(altered)
+            self.assertFalse(self.classify()['eligible'])
+
+    def test_checksum_only_tampering_duplicates_and_malformed_blobs_rejected(self):
+        self.new['go.sum'] = self.old['go.sum'].replace('A', 'B')
+        self.assertFalse(self.classify()['eligible'])
+        self.new['go.mod'] = self.mod
+        self.new['go.sum'] = self.old['go.sum'].replace('v0.58.0', 'v0.60.0')
+        self.assertFalse(self.classify()['eligible'])
+        self.new['go.mod'] = self.mod.replace('v0.58.0', 'v0.60.0')
+        for value in (self.old['go.sum'] * 2, 'not a checksum\n'):
+            self.new['go.sum'] = value
+            self.assertFalse(self.classify()['eligible'])
+        self.new['config/compact-dependencies.json'] = '{bad'
+        self.assertFalse(self.classify()['eligible'])
+
+    def test_mixed_runtime_policy_and_test_edits_remain_manual(self):
+        for name in ('internal/policy/policy.go', 'config/supply-chain-policy.yml',
+                     'AGENTS.md', '.github/workflows/ci.yml', 'tests/test_example.py'):
+            self.assertFalse(self.classify([name])['eligible'])
+        entries = [{'path': 'go.mod', 'added': 1, 'deleted': 1}]
+        self.assertFalse(bg.classify(entries, self.policy)['eligible'])
+        self.assertFalse(bg.classify(entries, self.policy, '/candidate', 'short', self.head)['eligible'])
+
+    def test_real_git_blobs_not_mutable_worktree_determine_eligibility(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            bg.git(repo, 'init', '-q')
+            bg.git(repo, 'config', 'user.name', 'Test')
+            bg.git(repo, 'config', 'user.email', 'test@example.invalid')
+            path = repo / 'go.mod'
+            path.write_text(self.mod)
+            bg.git(repo, 'add', 'go.mod')
+            bg.git(repo, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base')
+            base = bg.git(repo, 'rev-parse', 'HEAD').strip()
+            path.write_text(self.new['go.mod'])
+            bg.git(repo, 'add', 'go.mod')
+            bg.git(repo, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'update')
+            head = bg.git(repo, 'rev-parse', 'HEAD').strip()
+            path.write_text('replace example.invalid/lib => /untrusted\n')
+            entries = bg.changes(repo, base, head)
+            self.assertTrue(bg.classify(entries, self.policy, repo, base, head)['eligible'])
+            self.assertFalse(bg.dependency_update_allowed(repo, head, base, {'go.mod'}))
 
 
 class MergeGateTests(unittest.TestCase):

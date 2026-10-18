@@ -1,5 +1,6 @@
 """Reviewed dependency floors preserve newer custom versions and fail closed."""
 import json
+import re
 from pathlib import Path
 import sys
 import unittest
@@ -43,6 +44,24 @@ class DependencyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             deps.upgrades({name: {}}, policy)
 
+    def test_http2_security_floor_covers_root_and_external_builds(self):
+        policy = json.loads((ROOT / 'config/compact-dependencies.json').read_text())
+        name = 'golang.org/x/net'
+        floor = policy['modules'][name]
+        self.assertGreaterEqual(deps.version(floor), deps.version('v0.60.0'))
+        selected = re.search(r'^\s*golang.org/x/net\s+(v\S+)',
+                             (ROOT / 'go.mod').read_text(), re.MULTILINE)
+        self.assertIsNotNone(selected)
+        self.assertGreaterEqual(deps.version(selected.group(1)), deps.version(floor))
+        for old in ('v0.58.0', 'v0.59.0'):
+            self.assertEqual(deps.upgrades({name: {'Version': old}}, policy), [name + '@' + floor])
+        self.assertEqual(deps.upgrades({name: {'Version': floor}}, policy), [])
+        major, minor, patch = deps.version(floor)
+        newer = f'v{major}.{minor}.{patch + 1}'
+        self.assertEqual(deps.upgrades({name: {'Version': newer}}, policy), [])
+        with self.assertRaises(ValueError):
+            deps.upgrades({name: {'Version': newer, 'Replace': {'Path': '../custom-net'}}}, policy)
+
     def test_license_bearing_afero_release_is_required_when_present(self):
         policy = json.loads((ROOT / 'config/compact-dependencies.json').read_text())
         name = 'github.com/fclairamb/afero-snd'
@@ -62,6 +81,11 @@ class DependencyTests(unittest.TestCase):
              patch.object(deps.subprocess, 'run') as run, self.assertRaisesRegex(ValueError, 'did not meet'):
             deps.apply(Path('/scratch'), Path('/policy'))
         self.assertEqual(run.call_args_list[0].args[0], ['go', 'get', 'example.com/module@v1.2.3'])
+
+    def test_version_missing_patch_component(self):
+        for bad in ('v1.2', 'v1', 'v'):
+            with self.assertRaises(ValueError):
+                deps.version(bad)
 
     def test_every_external_go_build_applies_floors_after_copy(self):
         for name in ['vinbero', *('free5gc-' + n for n in develop.NF_NAMES)]:

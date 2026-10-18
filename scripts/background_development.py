@@ -32,6 +32,9 @@ SENSITIVE_DOCS = {'AGENTS.md', 'AGENTS.ja.md', 'SECURITY.md', 'SECURITY.ja.md',
                   'THIRD_PARTY_NOTICES.ja.md'}
 # Only prose-oriented files; runbooks, evidence, standards and policy are manual.
 AUTO_DOCS = {'README.md', 'README.ja.md', 'docs/glossary.md', 'docs/glossary.ja.md'}
+AUTO_DEPENDENCIES = {'go.mod', 'go.sum', 'config/compact-dependencies.json'}
+DEPENDENCY_DOCS = {'docs/supply-chain.md', 'docs/supply-chain.ja.md',
+                   'docs/image-distribution.md', 'docs/image-distribution.ja.md'}
 PRIVATE_PARTS = {'.git', '.lab', '.ssh', '.codex', 'worktrees', 'secrets', 'artifacts'}
 
 
@@ -248,9 +251,86 @@ def changes(repo, base, head):
     return result
 
 
-def classify(entries, policy):
+def compatible_version(old, new):
+    """Only stable, non-decreasing versions within an existing major line."""
+    pattern = r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+    before, after = re.fullmatch(pattern, old), re.fullmatch(pattern, new)
+    if not before or not after:
+        return False
+    left, right = tuple(map(int, before.groups())), tuple(map(int, after.groups()))
+    return left[0] == right[0] and left <= right
+
+
+def dependency_update_allowed(repo, base, head, names):
+    """Inspect immutable blobs, not worker claims or executable candidate parsers."""
+    if repo is None or not SHA.fullmatch(base or '') or not SHA.fullmatch(head or ''):
+        return False
+    def blob(commit, name):
+        return git(repo, 'show', commit + ':' + name)
+    updated = False
+    try:
+        if 'go.mod' in names:
+            before, after = blob(base, 'go.mod').splitlines(), blob(head, 'go.mod').splitlines()
+            if len(before) != len(after):
+                return False
+            in_require = False
+            for old, new in zip(before, after):
+                if old == new:
+                    if old.strip() == 'require (':
+                        in_require = True
+                    elif old.strip() == ')':
+                        in_require = False
+                    continue
+                if not in_require and not old.startswith('require '):
+                    return False
+                pattern = r'(\s*(?:require\s+)?[^\s]+\s+)(v[^\s]+)(\s*(?:// indirect)?)'
+                left, right = re.fullmatch(pattern, old), re.fullmatch(pattern, new)
+                if (not left or not right or left[1] != right[1] or left[3] != right[3]
+                        or not compatible_version(left[2], right[2])):
+                    return False
+                updated |= left[2] != right[2]
+        if 'config/compact-dependencies.json' in names:
+            old = json.loads(blob(base, 'config/compact-dependencies.json'))
+            new = json.loads(blob(head, 'config/compact-dependencies.json'))
+            before, after = old.pop('modules'), new.pop('modules')
+            for value in (old.pop('reviewed'), new.pop('reviewed')):
+                if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+                    return False
+                datetime.strptime(value, '%Y-%m-%d')
+            if old != new or before.keys() != after.keys():
+                return False
+            for name, version in before.items():
+                if version != after[name]:
+                    if not compatible_version(version, after[name]):
+                        return False
+                    updated = True
+        if 'go.sum' in names:
+            if 'go.mod' not in names:
+                return False
+            def sums(commit):
+                result = {}
+                for line in blob(commit, 'go.sum').splitlines():
+                    match = re.fullmatch(r'(\S+ v\S+) (h1:[A-Za-z0-9+/]{43}=)', line)
+                    if not match or match[1] in result:
+                        raise ValueError('invalid checksum record')
+                    result[match[1]] = match[2]
+                return result
+            before, after = sums(base), sums(head)
+            if any(before[key] != after[key] for key in before.keys() & after.keys()):
+                return False
+    except (ValueError, KeyError, TypeError, AttributeError, subprocess.CalledProcessError):
+        return False
+    return updated
+
+
+def classify(entries, policy, repo=None, base=None, head=None):
     """Conservative eligibility, NOT a substitute for immutable semantic review."""
     reasons = []
+    names = {entry['path'] for entry in entries}
+    dependency_change = bool(names & AUTO_DEPENDENCIES)
+    dependency_allowed = dependency_change and dependency_update_allowed(repo, base, head, names)
+    if dependency_change and not dependency_allowed:
+        reasons.append('dependency-update-needs-decision')
     if not entries:
         reasons.append('empty-change')
     if len(entries) > policy['limits']['changed_files']:
@@ -261,6 +341,8 @@ def classify(entries, policy):
         name = entry['path']
         safe_relative(name)
         if name in AUTO_DOCS:
+            continue
+        if dependency_allowed and name in AUTO_DEPENDENCIES | DEPENDENCY_DOCS:
             continue
         if name in {'config/documentation.json', 'config/public-source.json'}:
             continue  # Exact mechanical regeneration checked separately.

@@ -601,7 +601,8 @@ def publish(store, state, policy, task_id, entry):
         'title': 'Background: ' + task_id, 'head': branch, 'base': 'main',
         'body': public_summary(task_id, 'review') + '\n\n'
                 'Local source/unit/lint/secret checks passed. Live validation is not claimed. '
-                'Runtime, dependency, policy and inconclusive changes require human review.\n'
+                'Bounded dependency updates may qualify after immutable review and required CI. '
+                'Runtime, policy and inconclusive changes require human review.\n'
                 f"Base: `{entry['base']}`\nHead: `{entry['head']}`"})
     entry.update({'pr': pr['number'], 'status': 'review'})
     state['last_result'] = public_summary(task_id, 'review', pr['number'])
@@ -814,7 +815,7 @@ def develop(store, state, policy, operator, task, run_id, deadline):
                'decision_required': True, 'requires_live_validation': bool(task['profiles']),
                'reviewed_at': datetime.now(ZoneInfo('UTC')).isoformat()}
     try:
-        receipt.update(classify(changes(candidate, base, head), policy))
+        receipt.update(classify(changes(candidate, base, head), policy, candidate, base, head))
     except ValueError:
         receipt['eligible'] = False
     # New read-only session, fixed immutable candidate, no author conversation.
@@ -823,7 +824,16 @@ def develop(store, state, policy, operator, task, run_id, deadline):
     review_prompt = (
         f'Review only git diff {base} {head}. Do not edit files or run source code. '
         'This is a public lab. Auto merge is limited to prose typo/link/translation repairs and '
-        'strictly additive tests of EXISTING behavior. Reject changed commands, safety/license '
+        'strictly additive tests of EXISTING behavior, and bounded dependency updates. '
+        'For dependencies, require existing Go module identities, stable non-decreasing same-major '
+        'versions (including compatible v0 minor updates), unchanged Go/toolchain directives, '
+        'no new replacements/exclusions, unchanged license pins and scanner policy. '
+        'Check compatibility using upstream change evidence, affected runtime paths and regression '
+        'coverage; unresolved compatibility, licensing, missing evidence or required live validation '
+        'means decision_required=true. Check go.sum consistency with the resolved module graph; '
+        'dependency documentation may only explain this update, never rewrite historical evidence. '
+        'Do not treat CI success alone as compatibility or deployment evidence. '
+        'Reject changed commands, safety/license '
         'guidance, support or validation claims, assertions weakened through additions, '
         'skip/mocking/harness manipulation, data disclosure, and inconclusive cases. '
         'Check English/Japanese semantic parity. Output the required booleans; doubtful means '
