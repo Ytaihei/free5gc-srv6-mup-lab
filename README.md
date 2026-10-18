@@ -25,7 +25,11 @@ Fresh compact databases require an AVX-capable CPU exposed to the guest;
 Ubuntu 24.04 x86-64 and KVM alone are not sufficient. The current `./lab doctor`
 does not check AVX. See the [database prerequisites](docs/database-migration.md).
 
-The optional [background development coordinator](docs/background-development.md)
+The opt-in [Issue-driven Qwen workflow](docs/issue-development.md) accepts explicitly
+authorized Issues, isolates checks, and gates PR publication and merging on
+independent review. It is disabled by default and separate from the legacy timers.
+
+The legacy optional [background development coordinator](docs/background-development.md)
 is installed paused and separates coding, checks and publication. Live-lab
 deployment/recovery adapters and unattended acceptance remain incomplete; it is
 not enabled by cloning or starting the lab.
