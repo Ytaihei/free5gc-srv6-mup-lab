@@ -47,8 +47,8 @@
       "source": "docs/compact-lab.md",
       "translation": "docs/compact-lab.ja.md",
       "kind": "markdown",
-      "source_sha256": "7716fbc372c0cc54b1a6e2a097e55fab893907b8f3d09c38dc0cafcd1c6476e5",
-      "translation_sha256": "d94adf8b979253b9230303ee498b29a219cdc2b8fa3c4ae910e465b32deeba05"
+      "source_sha256": "a0ebd0e912b38d835af1eb1450d6bd98490a03c1adeb158a3419b7c716231e83",
+      "translation_sha256": "58717aa6e9297757bd0d04bc50d2d1088acdcc95e49fb9e3d4b7a28c9e4dab48"
     },
     {
       "source": ".github/PULL_REQUEST_TEMPLATE.md",
@@ -68,8 +68,8 @@
       "source": "README.md",
       "translation": "README.ja.md",
       "kind": "markdown",
-      "source_sha256": "c40fd15af4b71734f7def248b5cb676bf425a6f3e1f5c3ec6d7a1e54eebebaf0",
-      "translation_sha256": "0b5dd122bc7edb51555e37f494c7e808962fd358f7f0e6a9dc0fcccb0239b631"
+      "source_sha256": "4e5350333f74b21d14fb0d3f5943ea5d5d5930e766531f1b3fa3b1cc001591b9",
+      "translation_sha256": "9e523fab6595f3551f066d52b6b0ee3f83cb5074b59b34e31996ebc152951ffb"
     },
     {
       "source": "SECURITY.md",
@@ -208,8 +208,8 @@
       "source": "docs/issue-development.md",
       "translation": "docs/issue-development.ja.md",
       "kind": "markdown",
-      "source_sha256": "4d24f7296412df937b50d648e2e4115de3d62bc10ea36f4d4198c4b2f77ce6f4",
-      "translation_sha256": "72804f2e21e7fc9e1de4115ccac4a8547de6162425e94bfec91a7265df66a3d1"
+      "source_sha256": "3510a6e291b175bc9d52a7316e3d84c0a75c066d3e1c2897e240c5c75459acbf",
+      "translation_sha256": "fcab44998e6be8ca79901bf8f2e8a33d28f8596aa86100a673a95e7efe0d7ecb"
     },
     {
       "source": "docs/issue-chatgpt-pilot.md",

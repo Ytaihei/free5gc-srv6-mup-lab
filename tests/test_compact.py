@@ -27,6 +27,32 @@ from compact_vm import VM
 
 
 class CompactConfigTests(unittest.TestCase):
+    def test_avx_requires_exact_flag_on_every_reported_cpu(self):
+        for content in ('', 'flags : sse avx2\n', 'model name : avx\n',
+                        'flags : avx\n\nflags : sse\n'):
+            with self.subTest(content=content), patch.object(Path, 'read_text', return_value=content), \
+                 self.assertRaisesRegex(ValueError, 'host AVX'):
+                compact_vm.require_host_avx()
+        with patch.object(Path, 'read_text', return_value='flags\t: sse avx avx2\n\nflags : avx\n'):
+            compact_vm.require_host_avx()
+
+    def test_unreadable_cpuinfo_is_not_assumed_supported(self):
+        with patch.object(Path, 'read_text', side_effect=OSError), \
+             self.assertRaisesRegex(ValueError, 'cannot verify host AVX'):
+            compact_vm.require_host_avx()
+
+    def test_preflight_rejects_missing_avx_before_resource_checks(self):
+        vm = VM(self.config())
+        with patch.object(Path, 'read_text', return_value='ID=ubuntu\nVERSION_ID="24.04"\n'), \
+             patch.object(compact_vm.shutil, 'which', return_value='/usr/bin/tool'), \
+             patch.object(compact_vm, 'run'), patch.object(compact_vm.os, 'access', return_value=True), \
+             patch.object(compact_vm.os, 'uname', return_value=type('Uname', (), {'machine': 'x86_64'})()), \
+             patch.object(compact_vm, 'require_host_avx', side_effect=ValueError('host AVX')) as avx, \
+             patch.object(compact_vm, 'output') as output, self.assertRaisesRegex(ValueError, 'host AVX'):
+            vm.preflight()
+        avx.assert_called_once_with()
+        output.assert_not_called()
+
     def config(self, content=None):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'profile.yml'

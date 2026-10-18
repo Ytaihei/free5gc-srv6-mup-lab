@@ -10,7 +10,7 @@
 
 単一VMでのセットアップと部品単位の改変については、[コンパクト構成の手順](docs/compact-lab.ja.md)と[構築済みイメージ／開発の操作](docs/prebuilt-development.ja.md)を参照してください。ソースからの構築は利用できますが、構築済みイメージの配布は引き続き審査完了が条件です。
 
-単一VMでDBを新規作成するには、ゲストにAVX対応CPUを公開する必要があります。Ubuntu 24.04 x86-64とKVMだけでは十分ではなく、現在の`./lab doctor`はAVXを検査しません。[DBの前提条件](docs/database-migration.ja.md)を参照してください。
+単一VMでDBを新規作成するには、ゲストにAVX対応CPUを公開する必要があります。Ubuntu 24.04 x86-64とKVMだけでは十分ではありません。`./lab doctor`は構築前にホストのAVXを検査し、DB準備でもゲストへの実際の公開状態を検査します。[DBの前提条件](docs/database-migration.ja.md)を参照してください。
 
 任意の[Issue駆動Qwenワークフロー](docs/issue-development.ja.md)は明示的に許可されたIssueを受け付け、検査を隔離し、独立レビューをPR公開・マージの条件とします。初期状態では無効で、旧タイマーとは独立しています。
 

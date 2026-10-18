@@ -32,8 +32,9 @@ required; synthetic session injection is not a replacement.
 Prerequisites are Ubuntu 24.04 x86-64, libvirt/KVM, Python YAML/Jinja2,
 OpenSSH, curl, Git, qemu-img, virt-install and a working systemd user session.
 Fresh databases use MongoDB 8.0 and require AVX exposed to the guest CPU.
-The current `./lab doctor` does not test AVX; without it, fresh database setup
-fails later even if the host preflight passes. See [database requirements](database-migration.md).
+`./lab doctor` rejects hosts without AVX before provisioning. With nested virtualization,
+the outer hypervisor must expose AVX too. Host success does not prove guest exposure;
+database setup retains its guest-side check. See [database requirements](database-migration.md).
 `./lab deps` previews the package/group changes without requiring Python
 modules. `sudo ./lab deps --apply` explicitly installs them and creates the
 default image directory only if absent. Log out and back in after group

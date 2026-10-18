@@ -107,6 +107,19 @@ PR and check-reading access, plus the read access needed to inspect branch rules
 do not grant protection bypass. No token is put in command arguments or worker
 environments. Publishing uses a trusted Git credential adapter outside the checks.
 
+Alternatively, after explicit operator approval for unattended use of an existing
+GitHub CLI login, set `github_auth_user` to that account's login and
+`github_token_file` to `null`. The default is `null` (token-file mode); older v2
+configurations without this key keep that default. This uses `/usr/bin/gh auth token`
+for the fixed `github.com` host and selected account, with the operator's existing
+`~/.config/gh` store/keyring. It does not copy the credential or narrow its scopes:
+a broad existing login remains broad. A repository-scoped token is still preferred.
+Environment token overrides, alternate gh configuration directories, account
+fallback and interactive login are not used. Missing/expired credentials stop the
+operation. Only the trusted API/Git parent uses the credential; it is not passed
+to the Qwen worker, candidate tests, command arguments or retained logs. The Git
+helper receives only the account selector. Service activation is still separate.
+
 Version 2 configuration replaces the paid API key with `review_session_dir`, the
 dedicated pilot OAuth directory (outside source and coordinator state), and
 `review_included_only_confirmed`. Select `review_model` from that account's model

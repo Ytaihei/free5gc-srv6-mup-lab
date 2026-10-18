@@ -41,6 +41,19 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def require_host_avx():
+    """Fail early; guest checks still verify actual host-passthrough exposure."""
+    try:
+        cpuinfo = Path('/proc/cpuinfo').read_text()
+    except OSError as exc:
+        raise ValueError('cannot verify host AVX required by MongoDB 8.0') from exc
+    flags = [set(value.split()) for line in cpuinfo.splitlines()
+             for key, sep, value in [line.partition(':')]
+             if sep and key.strip() == 'flags']
+    if not flags or any('avx' not in values for values in flags):
+        raise ValueError('host AVX is required by MongoDB 8.0; expose AVX through nested virtualization if applicable')
+
+
 def prepare_base_image(base, spec):
     """Keep a new public distribution image readable after libvirt relabels it."""
     partial = base.with_suffix('.partial')
@@ -114,6 +127,7 @@ class VM:
             raise ValueError('KVM is required; software emulation is not supported')
         if os.uname().machine != 'x86_64':
             raise ValueError('compact v1 supports x86-64 only')
+        require_host_avx()
         directory = self.disk.parent
         if not directory.is_dir() or not os.access(directory, os.W_OK):
             raise ValueError(f'image directory must exist and be writable: {directory}')
