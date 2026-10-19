@@ -25,7 +25,7 @@ import uuid
 
 from background_development import changes, load_policy, merge_gate
 from issue_chatgpt_review import ReviewBlocked, review_text, strict_json
-from issue_worker import (CHECK_COMMANDS, MAX_FILE, checks, regular, relative, tree_files,
+from issue_worker import (CHECK_COMMANDS, MAX_FILE, checks, refresh_manifests, regular, relative, tree_files,
                           worker, writable)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -318,22 +318,7 @@ def freeze(repo, work, base, paths, cfg):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes((work / name).read_bytes())
     # Only the controller may regenerate exact manifests; worker cannot edit them.
-    policy_file = repo / 'config/public-source.json'
-    inventory = json.loads(policy_file.read_text())
-    additions = set(changed) - set(inventory['files'])
-    if any(not (name.startswith('tests/test_') and name.endswith('.py')
-                or name.startswith('internal/') and name.endswith('_test.go')) for name in additions):
-        raise ValueError('new source paths require an inventory review')
-    if additions:
-        inventory['files'] = sorted(set(inventory['files']) | additions)
-        policy_file.write_text(json.dumps(inventory, indent=2) + '\n')
-    doc_file = repo / 'config/documentation.json'
-    manifest = json.loads(doc_file.read_text())
-    for record in manifest['translations']:
-        for key in ('source', 'translation'):
-            if record[key] in changed:
-                record[key + '_sha256'] = hashlib.sha256((repo / record[key]).read_bytes()).hexdigest()
-    doc_file.write_text(json.dumps(manifest, indent=2) + '\n')
+    refresh_manifests(repo, changed)
     git(repo, 'add', '--all')
     git(repo, 'diff', '--cached', '--check')
     env = {'GIT_AUTHOR_NAME': cfg['author_name'], 'GIT_AUTHOR_EMAIL': cfg['author_email'],
