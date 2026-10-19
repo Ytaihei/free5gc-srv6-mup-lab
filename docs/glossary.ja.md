@@ -93,6 +93,7 @@ Architecture Type 1（3GPP-5G）は別フィールドです。T1のRoute Typeは
 
 | 用語 | 意味 | このラボでの使い方 |
 |---|---|---|
+| agent:ready | 有界な Issue タスクの承認ラベル | Issue 作成者と最新の実行ラベル付与者の両方が信頼される場合にのみ実行を許可。公開、マージ、ライブラボ操作を直接有効化しない。[issue-development](issue-development.ja.md) で契約を確認。 |
 | free5gc-compose / UERANSIM | コンテナー化した5Gコア / UE・gNBの模擬実装 | 参照構成はcore VM内でComposeを動かし、KVM/libvirtとAnsibleで6ゲストを配備。単一VM構成は1台のKVM/libvirtゲスト内にcoreなどの役割をComposeで配置し、`./lab`で管理 |
 | GoBGP / Vinbero | BGPライブラリ / eBPFを使うMUP SRv6実装 | controllerとPEで異なる版を意図的に固定。ライブラリ機能の存在はラボの対応保証ではない |
 | Connect RPC / mupctl | 型付きHTTP RPC / controllerのCLI | 状態読み取りと抑止操作は別。信頼する網への待ち受け限定はAPI認証ではない |
