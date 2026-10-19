@@ -87,7 +87,7 @@ RDs, RTs, locators, and SIDs.
   VM with Compose in the experimental compact profile; isolated user-plane networks in both
 - free5GC v4.2.3 with gtp5g v0.9.5 and UERANSIM v3.3.0
 - Passive PFCP session reconstruction on `br-free5gc`
-- Policy-driven MUP-C, GoBGP v4.9.0, Connect RPC, and `mupctl`
+- Policy-driven MUP-C, GoBGP v4.10.0, Connect RPC, and `mupctl`
 - Vinbero v0.1.1 patched to use upstream GoBGP v4.8
 - Vinbero driver-mode XDP on reference virtio PE interfaces, or generic XDP on
   compact veth interfaces; patched eBPF objects regenerated during provisioning

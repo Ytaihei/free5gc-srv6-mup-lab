@@ -52,7 +52,7 @@
 - 参照構成は自動起動しない6台のlibvirt VM、実験用コンパクト構成は自動起動しない1台のVMとCompose。どちらもユーザープレーンネットワークを隔離
 - free5GC v4.2.3、gtp5g v0.9.5、UERANSIM v3.3.0
 - `br-free5gc` 上でのパッシブなPFCPセッション再構成
-- ポリシー駆動のMUP-C、GoBGP v4.9.0、Connect RPC、`mupctl`
+- ポリシー駆動のMUP-C、GoBGP v4.10.0、Connect RPC、`mupctl`
 - 上流GoBGP v4.8を使う互換パッチを適用したVinbero v0.1.1
 - 参照構成はPEのvirtioでdriver-mode XDP、単一VM構成はvethでgeneric XDP。パッチ適用済みeBPFオブジェクトはプロビジョニング時に再生成
 - 部分的な失敗をローカルで巻き戻すT1/T2ペア広告と、15秒のオブザーバーリース失効による撤回。両PEへの同時・不可分な適用ではない

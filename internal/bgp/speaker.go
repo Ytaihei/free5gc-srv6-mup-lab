@@ -145,7 +145,7 @@ func (s *Speaker) PeerState(ctx context.Context) string {
 }
 
 // BuildSessionPaths creates the current draft-ietf-bess-mup-safi-01 wire
-// forms used by the GoBGP v4.9 controller and v4.8 PEs. T1 carries the RAN
+// forms used by the GoBGP v4.10 controller and v4.8 PEs. T1 carries the RAN
 // F-TEID and QFI; T2 carries the
 // UPF F-TEID with endpoint-address-length 64 (IPv4 endpoint + exact TEID).
 func BuildSessionPaths(cfg config.Config, s model.Session) (*apiutil.Path, *apiutil.Path, error) {
