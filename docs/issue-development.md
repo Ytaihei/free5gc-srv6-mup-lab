@@ -56,12 +56,27 @@ replacement), and `run_tests`. It does not give the model a shell, GitHub token 
 arbitrary command execution. This is a small tool loop, not a launch of the full
 Codex CLI used in the earlier feasibility experiment.
 
+`read_file` returns complete lines plus `start_line`, `end_line`, `total_lines`
+and `next_start_line` metadata. Optional `start_line` is one-based; `max_lines`
+defaults to 40 and accepts 1–120. Each page contains at most 4,000 UTF-8 bytes of
+file text. Read only relevant sections instead of loading whole paired guides.
+The continuation is `null` at EOF; an oversized single line is refused, not
+silently truncated. The existing total prompt and execution budgets still apply.
+
 The adapter disables thinking output to avoid empty completions when reasoning
 alone consumes the output budget. Response counts/reasons remain in private logs.
 Model requests are limited to 16K context, 4,096 generated tokens per request,
 24 turns and 600 seconds by default. The controller bounds prompt size, file size,
 candidate size, daily job count and pending candidates. There is no model fallback
 or automatic model download. A model's success statement is not acceptance.
+
+Requests use a finite 300-second Ollama `keep_alive` idle TTL so tool turns can
+reuse a loaded runner and its prompt cache instead of unloading after every reply.
+This does not extend the job deadline or guarantee cache reuse on every backend.
+The model may remain in memory for up to five idle minutes after the last request;
+the adapter does not force-unload a model that another local client might use.
+Available nonnegative integer load, prompt-evaluation, generation and total
+durations (nanoseconds) are recorded in private response metadata for diagnosis.
 
 Tests run without network or credentials in bubblewrap, using a temporary copy of
 the candidate, read-only toolchains/caches and no host home, Docker/libvirt socket
@@ -71,6 +86,15 @@ the Ansible syntax check and Gitleaks. Dependency and scanner caches must alread
 contain the pinned materials; missing offline materials fail rather than opening
 network access. The parent regenerates inventory/translation hashes mechanically;
 that is not a semantic translation review.
+
+Before the worker's unit check, the trusted adapter makes a disposable source copy
+and uses that same manifest-preparation routine for scoped edits and permitted new
+test files. It does not modify the worker's original tree or repair pre-existing
+hash mismatches for unchanged files. This prevents expected generated-hash changes
+from misleading the worker into attempting forbidden manifest edits. The exit code
+and last 2,000 log characters are returned to the model; the complete log remains
+private. Neither this preparation nor a worker summary replaces the final isolated
+checks, independent review or CI.
 
 The adapter itself runs as the operator user. Filesystem/network isolation applies
 to candidate execution, not to every process belonging to that user. Other trusted

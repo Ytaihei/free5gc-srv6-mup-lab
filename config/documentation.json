@@ -208,8 +208,8 @@
       "source": "docs/issue-development.md",
       "translation": "docs/issue-development.ja.md",
       "kind": "markdown",
-      "source_sha256": "3510a6e291b175bc9d52a7316e3d84c0a75c066d3e1c2897e240c5c75459acbf",
-      "translation_sha256": "fcab44998e6be8ca79901bf8f2e8a33d28f8596aa86100a673a95e7efe0d7ecb"
+      "source_sha256": "ba13ed358b0abface86a1d7b34b77bfd468e9007047ff89f0b3611d139d3c5ff",
+      "translation_sha256": "2765f2b92973a21bbde3e5462989d628a8fadd83c1e09e432aa31e81622eec3b"
     },
     {
       "source": "docs/issue-chatgpt-pilot.md",

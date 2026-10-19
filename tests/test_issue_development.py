@@ -2,6 +2,7 @@
 import copy
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
+import hashlib
 import json
 import io
 import os
@@ -558,7 +559,162 @@ class WorkerTests(unittest.TestCase):
         self.work = self.root / 'work'
         (self.work / 'tests').mkdir(parents=True)
         (self.work / 'tests/test_sample.py').write_text('old value\n')
+        (self.work / 'config').mkdir()
+        (self.work / 'config/public-source.json').write_text(json.dumps({'version': 1, 'files': [
+            'tests/test_sample.py', 'config/public-source.json', 'config/documentation.json']}))
+        (self.work / 'config/documentation.json').write_text(json.dumps({'version': 1, 'translations': []}))
         self.cfg = config(self.root)
+
+    def baseline(self):
+        return {name: hashlib.sha256((self.work / name).read_bytes()).hexdigest()
+                for name in worker.tree_files(self.work)}
+
+    def test_unit_copy_refreshes_only_changed_manifests_and_preserves_work(self):
+        (self.work / 'docs').mkdir()
+        for name in ['guide.md', 'guide.ja.md']:
+            (self.work / 'docs' / name).write_text('original\n')
+        policy = self.work / 'config/public-source.json'
+        inventory = json.loads(policy.read_text())
+        inventory['files'] += ['docs/guide.md', 'docs/guide.ja.md']
+        policy.write_text(json.dumps(inventory))
+        manifest = self.work / 'config/documentation.json'
+        manifest.write_text(json.dumps({'version': 1, 'translations': [{
+            'source': 'docs/guide.md', 'translation': 'docs/guide.ja.md',
+            'source_sha256': hashlib.sha256(b'original\n').hexdigest(),
+            'translation_sha256': 'preexisting-invalid-hash-must-not-be-hidden'}]}))
+        original_policy, original_manifest = policy.read_bytes(), manifest.read_bytes()
+        baseline = self.baseline()
+        (self.work / 'docs/guide.md').write_text('updated\n')
+        (self.work / 'tests/test_added.py').write_text('# new regression\n')
+        target = self.root / 'prepared'
+        worker.prepare_unit_source(self.work, target, ['docs/', 'tests/'], baseline)
+        self.assertEqual(policy.read_bytes(), original_policy)
+        self.assertEqual(manifest.read_bytes(), original_manifest)
+        row = json.loads((target / 'config/documentation.json').read_text())['translations'][0]
+        self.assertEqual(row['source_sha256'], hashlib.sha256(b'updated\n').hexdigest())
+        self.assertEqual(row['translation_sha256'], 'preexisting-invalid-hash-must-not-be-hidden')
+        self.assertIn('tests/test_added.py', json.loads((target / 'config/public-source.json').read_text())['files'])
+        (target / 'docs/guide.md').write_text('copy-only\n')
+        self.assertEqual((self.work / 'docs/guide.md').read_text(), 'updated\n')
+
+    def test_unit_copy_refuses_scope_changes_and_deletions(self):
+        baseline = self.baseline()
+        manifest = self.work / 'config/documentation.json'
+        original = manifest.read_text()
+        manifest.write_text(original + '\n')
+        with self.assertRaisesRegex(ValueError, 'scope'):
+            worker.prepare_unit_source(self.work, self.root / 'scope', ['tests/'], baseline)
+        manifest.write_text(original)
+        (self.work / 'tests/test_sample.py').unlink()
+        with self.assertRaisesRegex(ValueError, 'deleted'):
+            worker.prepare_unit_source(self.work, self.root / 'deleted', ['tests/'], baseline)
+
+    def test_unit_copy_refuses_unreviewed_new_paths_and_unsafe_manifest_paths(self):
+        baseline = self.baseline()
+        (self.work / 'docs').mkdir()
+        added = self.work / 'docs/new.md'
+        added.write_text('new documentation\n')
+        with self.assertRaisesRegex(ValueError, 'inventory review'):
+            worker.prepare_unit_source(self.work, self.root / 'new-path', ['docs/'], baseline)
+        added.unlink()
+        manifest = self.work / 'config/documentation.json'
+        manifest.write_text(json.dumps({'translations': [{'source': '../outside', 'translation': 'docs/a.md'}]}))
+        with self.assertRaisesRegex(ValueError, 'unsafe relative'):
+            worker.refresh_manifests(self.work, [])
+
+    def test_test_log_tail_is_bounded_but_full_failure_log_is_retained(self):
+        responses = iter([
+            {'done': True, 'message': {'role': 'assistant', 'tool_calls': [
+                {'function': {'name': 'run_tests', 'arguments': {}}}]}},
+            {'done': True, 'message': {'role': 'assistant', 'content': 'Tests failed; stopping.'}}])
+        full_log = 'large test detail\n' * 2000 + 'FAIL: real_failure\n'
+        def fake_check(work, cfg, argv, log, seconds):
+            self.assertNotEqual(work, self.work)
+            self.assertEqual((work / 'tests/test_sample.py').read_text(), 'old value\n')
+            self.assertEqual(argv, ['make', 'unit', 'GO=/toolchain/go/bin/go'])
+            log.write_text(full_log)
+            return 7
+        with patch.object(worker, 'isolated', side_effect=fake_check):
+            worker.worker(self.work, self.cfg, {'paths': ['tests/']}, self.root / 'evidence',
+                          transport=lambda *a, **kw: next(responses))
+        evidence = self.root / 'evidence'
+        self.assertEqual((evidence / 'unit-0.log').read_text(), full_log)
+        records = [json.loads(line) for line in (evidence / 'worker.jsonl').read_text().splitlines()]
+        result = next(row['result'] for row in records if row.get('tool') == 'run_tests')
+        self.assertTrue(result.startswith('exit=7\n'))
+        self.assertIn('FAIL: real_failure', result)
+        self.assertLess(len(result), 2100)
+
+    def test_read_pages_preserve_lines_and_report_continuation(self):
+        text = ''.join(f'line {n}\n' for n in range(95)) + 'last without newline'
+        (self.work / 'tests/test_sample.py').write_text(text)
+        first = json.loads(worker.read_page(self.work, 'tests/test_sample.py'))
+        self.assertEqual((first['start_line'], first['end_line'], first['total_lines']), (1, 40, 96))
+        self.assertEqual(first['next_start_line'], 41)
+        second = json.loads(worker.read_page(self.work, 'tests/test_sample.py', 41, 40))
+        last = json.loads(worker.read_page(self.work, 'tests/test_sample.py', 81, 120))
+        self.assertEqual(second['next_start_line'], 81)
+        self.assertIsNone(last['next_start_line'])
+        self.assertEqual(first['content'] + second['content'] + last['content'], text)
+
+    def test_read_page_bounds_utf8_bytes_not_characters(self):
+        line = '日' * 100 + '\n'
+        (self.work / 'tests/test_sample.py').write_text(line * 40)
+        page = json.loads(worker.read_page(self.work, 'tests/test_sample.py', max_lines=120))
+        self.assertLessEqual(len(page['content'].encode('utf-8')), worker.READ_BYTES)
+        self.assertEqual(page['content'], line * 13)
+        self.assertEqual(page['next_start_line'], 14)
+
+    def test_read_page_empty_file_and_oversized_line(self):
+        path = self.work / 'tests/test_sample.py'
+        path.write_text('')
+        page = json.loads(worker.read_page(self.work, 'tests/test_sample.py'))
+        self.assertEqual(page, {'start_line': 1, 'end_line': 0, 'total_lines': 0,
+                                'next_start_line': None, 'content': ''})
+        path.write_text('x' * worker.READ_BYTES)
+        self.assertEqual(len(json.loads(worker.read_page(self.work, 'tests/test_sample.py'))['content']),
+                         worker.READ_BYTES)
+        path.write_text('short\n' + 'x' * (worker.READ_BYTES + 1))
+        self.assertEqual(json.loads(worker.read_page(self.work, 'tests/test_sample.py'))['next_start_line'], 2)
+        with self.assertRaisesRegex(ValueError, 'single line'):
+            worker.read_page(self.work, 'tests/test_sample.py', 2)
+
+    def test_read_page_rejects_invalid_ranges_and_paths(self):
+        for start, count in [(0, 40), (-1, 40), (True, 40), (1.0, 40), ('1', 40),
+                             (2, 40), (1, 0), (1, 121), (1, True), (1, 1.5), (1, '40')]:
+            with self.subTest(start=start, count=count), self.assertRaises(ValueError):
+                worker.read_page(self.work, 'tests/test_sample.py', start, count)
+        (self.work / 'tests/link.py').symlink_to(self.root / 'private')
+        os.link(self.work / 'tests/test_sample.py', self.work / 'tests/hard.py')
+        for name in ['../secret', '/etc/passwd', '.git/config', 'tests/link.py', 'tests/hard.py']:
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                worker.read_page(self.work, name)
+
+    def test_long_paired_documents_do_not_exhaust_prompt_on_first_reads(self):
+        names = ['guide.md', 'guide.ja.md', 'glossary.md', 'glossary.ja.md']
+        for name in names:
+            (self.work / 'tests' / name).write_text(('日英の長い文書' * 20 + '\n') * 200)
+        calls = [{'function': {'name': 'read_file', 'arguments': {'path': 'tests/' + name}}}
+                 for name in names]
+        requests = []
+        def transport(url, data, **kwargs):
+            requests.append(len(json.dumps(data['messages'])))
+            if len(requests) == 1:
+                response_calls = calls
+            elif len(requests) == 2:
+                self.assertLess(requests[-1], 60000)
+                response_calls = [{'function': {'name': 'run_tests', 'arguments': {}}}]
+            else:
+                return {'done': True, 'message': {'role': 'assistant', 'content': 'Tests observed.'}}
+            return {'done': True, 'message': {'role': 'assistant', 'tool_calls': response_calls}}
+        def fake_check(work, cfg, argv, log, seconds):
+            log.write_text('OK\n')
+            return 0
+        with patch.object(worker, 'isolated', side_effect=fake_check):
+            result = worker.worker(self.work, self.cfg, {'paths': ['tests/']}, self.root / 'evidence',
+                                   transport=transport)
+        self.assertEqual(result, 'Tests observed.')
+        self.assertEqual(len(requests), 3)
 
     def test_patch_scope_and_unique_match(self):
         worker.edit(self.work, ['tests/'], 'tests/test_sample.py', 'old', 'new')
@@ -597,6 +753,8 @@ class WorkerTests(unittest.TestCase):
                     **({'tool_calls': calls} if calls else {})}}
         responses = iter([
             response([{'function': {'name': 'read_file', 'arguments': {'path': 'tests/test_sample.py'}}}]),
+            response([{'function': {'name': 'read_file', 'arguments': {'path': 'tests/test_sample.py',
+                                                                     'start_line': 1, 'max_lines': 1}}}]),
             response([{'function': {'name': 'apply_patch', 'arguments': {'path': 'tests/test_sample.py',
                                                                           'old': 'old', 'new': 'new'}}}]),
             response([{'function': {'name': 'run_tests', 'arguments': {}}}]),
@@ -609,6 +767,10 @@ class WorkerTests(unittest.TestCase):
                                    transport=lambda *a, **kw: next(responses))
         self.assertIn('Done', result)
         self.assertEqual((self.work / 'tests/test_sample.py').read_text(), 'new value\n')
+        log = [json.loads(line) for line in (self.root / 'evidence/worker.jsonl').read_text().splitlines()]
+        reads = [json.loads(item['result']) for item in log if item.get('tool') == 'read_file']
+        self.assertEqual(len(reads), 2)
+        self.assertTrue(all(page['content'] == 'old value\n' for page in reads))
 
     def test_execution_limits_accommodate_existing_boundary_tests(self):
         with patch.object(worker.resource, 'setrlimit') as limit:
@@ -633,12 +795,24 @@ class WorkerTests(unittest.TestCase):
         response = {'done': True, 'message': {'role': 'assistant', 'content': ''}}
         def transport(url, data, **kwargs):
             self.assertFalse(data['think'])
+            self.assertEqual(data['keep_alive'], 300)
+            self.assertLessEqual(kwargs['seconds'], self.cfg['worker_seconds'])
             self.assertEqual({t['function']['name'] for t in data['tools']},
                              {'read_file', 'apply_patch', 'run_tests'})
             return response
         with self.assertRaises(ValueError):
             worker.worker(self.work, self.cfg, {'paths': ['tests/']}, self.root / 'evidence',
                           transport=transport)
+
+    def test_worker_records_only_nonnegative_integer_durations(self):
+        response = {'done': True, 'message': {'role': 'assistant', 'content': 'No tests.'},
+                    'total_duration': 300, 'load_duration': 0,
+                    'prompt_eval_duration': -1, 'eval_duration': 'unexpected text'}
+        with self.assertRaises(ValueError):
+            worker.worker(self.work, self.cfg, {'paths': ['tests/']}, self.root / 'evidence',
+                          transport=lambda *a, **kw: response)
+        metadata = json.loads((self.root / 'evidence/worker.jsonl').read_text().splitlines()[0])
+        self.assertEqual(metadata['timings_ns'], {'total_duration': 300, 'load_duration': 0})
 
 
 class SnapshotTests(unittest.TestCase):
