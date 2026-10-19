@@ -87,6 +87,15 @@ contain the pinned materials; missing offline materials fail rather than opening
 network access. The parent regenerates inventory/translation hashes mechanically;
 that is not a semantic translation review.
 
+Before the worker's unit check, the trusted adapter makes a disposable source copy
+and uses that same manifest-preparation routine for scoped edits and permitted new
+test files. It does not modify the worker's original tree or repair pre-existing
+hash mismatches for unchanged files. This prevents expected generated-hash changes
+from misleading the worker into attempting forbidden manifest edits. The exit code
+and last 2,000 log characters are returned to the model; the complete log remains
+private. Neither this preparation nor a worker summary replaces the final isolated
+checks, independent review or CI.
+
 The adapter itself runs as the operator user. Filesystem/network isolation applies
 to candidate execution, not to every process belonging to that user. Other trusted
 processes under the same account can modify configuration and state. Do not use
