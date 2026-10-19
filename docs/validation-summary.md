@@ -71,6 +71,31 @@ explicit-release dashboard socket-access defect remain in
 [image distribution](image-distribution.md); these source-build records do not
 approve prebuilt distribution.
 
+## Dashboard visual-feedback record (2026-10-20)
+
+The operator has provided preliminary positive feedback after viewing the
+dashboard. This should not be described as no visual review having occurred.
+However, the retained repository evidence does not bind that feedback to an
+exact deployment profile, source/image revision, observation time and a
+completed visual-state checklist. It is not a new formal acceptance record
+for either profile, and does not validate the prebuilt-release path.
+
+Earlier dated notes about an unavailable browser describe those historical
+checks, not a current access diagnosis. To complete a reproducible visual
+record, retain the following privately and publish only a reviewed summary:
+
+- Profile, exact source revision/image identities, observation time and browser.
+- Topology, session/route tables and health panels render with readable labels.
+- Probe success/failure and displayed path agree with the sampled API state;
+  animation is not independent proof of the packet's path.
+- Stale/offline states and recovery are displayed correctly during separately
+  authorized collector/recovery tests.
+- Pass/fail/not-tested for each item; screenshots and raw snapshots stay private.
+
+This clarification runs no browser or lab test. Existing HTTP/API and packet
+evidence retains its original scope; there is no need to repeat every completed
+lab acceptance merely to record the remaining visual observations.
+
 ## Acceptance boundary and future records
 
 A clean build on a different physical machine remains **unverified**. The
