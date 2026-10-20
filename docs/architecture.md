@@ -61,7 +61,7 @@ compact deployment. Source is public; prebuilt image distribution remains pendin
    `10.60.0.0/16`) and advertises T1 and T2 as a transactional pair.
    The same in-process GoBGP instance reflects ISD/DSD between its two iBGP
    clients, so no parallel packet-edge BGP session is required.
-   Pairing includes local rollback on partial advertisement failure, not
+   Pairing includes scoped local rollback attempts on partial advertisement failure, not
    simultaneous atomic installation on both PEs.
 5. The MUP PE (N6/Direct side) imports T1 (RT `65000:100`) and resolves it against the MUP PE (N3/Interwork side) ISD,
    creating the per-UE downlink headend. The MUP PE (N3/Interwork side)'s End.M.GTP4.E uses the
@@ -113,7 +113,18 @@ without changing the PFCP session.
 
 - PFCP requests are never published before an accepted response.
 - Stale snapshot generations and unexpected observer IDs are rejected.
-- T1/T2 partial advertisement is rolled back.
+- T1/T2 partial advertisement triggers withdrawal of the attempted pair by
+  concrete path, even if GoBGP returns an error without UUIDs. Failed cleanup
+  remains owned by the speaker and is retried every second and before new
+  advertisements/reconciliation, including after session deletion and while
+  the observer lease is healthy. New advertisements are blocked while a retry
+  fails; overlapping local NLRIs are rejected, not shared across sessions.
+  Stale advertisement handles cannot withdraw a later pair using the same NLRI.
+- Withdrawal failure can temporarily leave routes installed. Cleanup state is
+  in memory, not a durable queue; the one-second retry interval is not a recovery
+  deadline. RPC errors and retry logs report failures. Status route counts track
+  successfully advertised sessions, not residual paths pending cleanup; inspect
+  the actual RIB/PE state before claiming that fallback has completed.
 - Changed F-TEIDs replace both paths transactionally.
 - Observer loss expires after 15 seconds and withdraws all advertised sessions.
 - Operator suppression is per session and persists across observer snapshots
@@ -123,6 +134,11 @@ without changing the PFCP session.
 - The six-VM reference attaches PE packet programs in XDP driver mode on virtio
   NICs so cross-interface redirects are flushed to the egress device. The compact
   profile instead uses generic XDP on its container veth interfaces.
+
+Fault-injection tests in `internal/bgp/speaker_test.go` exercise real GoBGP
+UUID failures, scoped cleanup, retry, stale handles and withdrawal delivery to
+two loopback peers. Controller tests cover retry scheduling after session removal.
+These are isolated regression checks, not new live-VM or packet-forwarding evidence.
 
 ## Observability plane
 

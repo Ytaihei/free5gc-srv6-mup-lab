@@ -96,8 +96,8 @@
       "source": "docs/architecture.md",
       "translation": "docs/architecture.ja.md",
       "kind": "markdown",
-      "source_sha256": "092069e9f5ce696a40648d8272917b6a9f39adeef910215cdfa456716973df32",
-      "translation_sha256": "aa0092c27ae988167cf0ab5edb563d61e9ad1c4ed0b677524023b56e21987f5b"
+      "source_sha256": "55ef7d975dbb7a88c8597874c4cf29ce9c98b8eed6bdee672e18e622efc069bb",
+      "translation_sha256": "94851686d28fb22730d3d77c0d1f84031ddfa5aaee800258847ec2358363fd9a"
     },
     {
       "source": "docs/clean-room-reproduction.md",

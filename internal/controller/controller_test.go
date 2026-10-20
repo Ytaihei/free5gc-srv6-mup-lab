@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,4 +96,90 @@ func TestSnapshotPolicySuppressionAndLeaseWithdrawal(t *testing.T) {
 		t.Fatalf("expired session = %+v", c.sessions[s.Key])
 	}
 	c.mu.Unlock()
+}
+
+// This fake tests controller scheduling and error propagation; the actual RIB
+// cleanup, retry and peer delivery are tested with real GoBGP in package bgp.
+type cleanupProbe struct {
+	mu      sync.Mutex
+	pending bool
+	fail    bool
+	retried chan struct{}
+}
+
+func (p *cleanupProbe) Advertise(model.Session) (bgp.Advertisement, error) {
+	return bgp.Advertisement{}, errors.New("unexpected advertisement")
+}
+func (p *cleanupProbe) Withdraw(bgp.Advertisement) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pending = true
+	return errors.New("injected removal failure")
+}
+func (p *cleanupProbe) RetryWithdrawals() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.fail {
+		return errors.New("injected retry failure")
+	}
+	p.pending = false
+	select {
+	case p.retried <- struct{}{}:
+	default:
+	}
+	return nil
+}
+func (p *cleanupProbe) PeerState(context.Context) string { return "2/2 established" }
+
+func TestRemovedSessionRetainsSpeakerCleanupAndHealthyLeaseRetries(t *testing.T) {
+	cfg := config.Config{Observer: config.Observer{ID: "observer"}, Controller: config.Controller{Lease: time.Hour}}
+	c := New(cfg, nil)
+	p := &cleanupProbe{fail: true, retried: make(chan struct{}, 1)}
+	c.bgp = p
+	c.sessions["removed"] = &controlled{advertised: true}
+	_, err := c.SyncSnapshot(context.Background(), connect.NewRequest(&mupv1.SyncSnapshotRequest{
+		ObserverId: "observer", Generation: 1,
+	}))
+	if connect.CodeOf(err) != connect.CodeInternal {
+		t.Fatalf("withdrawal failure not reported: %v", err)
+	}
+	if len(c.sessions) != 0 || !p.pending {
+		t.Fatal("removed session or pending cleanup state incorrect")
+	}
+	p.mu.Lock()
+	p.fail = false
+	p.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); c.RunLease(ctx) }()
+	defer func() { cancel(); <-done }()
+	select {
+	case <-p.retried:
+	case <-time.After(3 * time.Second):
+		t.Fatal("healthy lease did not retry cleanup for removed session")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.pending {
+		t.Fatal("cleanup still pending")
+	}
+}
+
+func TestReconcileBlocksNewWorkUntilPendingCleanupSucceeds(t *testing.T) {
+	c := New(config.Config{}, nil)
+	p := &cleanupProbe{fail: true, pending: true, retried: make(chan struct{}, 1)}
+	c.bgp = p
+	if err := c.reconcileLocked(false); err == nil {
+		t.Fatal("pending withdrawal error ignored")
+	}
+	if !p.pending {
+		t.Fatal("failed retry lost cleanup state")
+	}
+	p.fail = false
+	if err := c.reconcileLocked(false); err != nil {
+		t.Fatal(err)
+	}
+	if p.pending {
+		t.Fatal("successful retry kept pending state")
+	}
 }
