@@ -201,8 +201,8 @@
       "source": "docs/glossary.md",
       "translation": "docs/glossary.ja.md",
       "kind": "markdown",
-      "source_sha256": "ac2ed088eb9d561a9f714fa7fe3a4da1e89ce6eb566fca20010a092f09786d84",
-      "translation_sha256": "a0ecd19437b46eeb226edc05812fa4a7b8cc1657bbbe54fc044fa6880efdc205"
+      "source_sha256": "379977abc16c2f956370bba317869d429755ae4c6ccc71432ddb266d54b71e13",
+      "translation_sha256": "a6c91265ceeb04245ecf0135ff456a8a577f59ed5129dd6654185dbf7e8dc719"
     },
     {
       "source": "docs/issue-development.md",
