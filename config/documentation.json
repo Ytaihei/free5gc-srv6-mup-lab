@@ -152,8 +152,8 @@
       "source": "docs/validation-summary.md",
       "translation": "docs/validation-summary.ja.md",
       "kind": "markdown",
-      "source_sha256": "dbe40c3c1b1068d7ae17044cdad51940396267b647a8ff3b8ba9edf6fde6dbef",
-      "translation_sha256": "ccb81cdb635ed8df89d187264db2b9e05a4c3e1680c7b83fe66de465608b4e4f"
+      "source_sha256": "92ca3e88905b3ac7007a417ccdb375ad2975addba81973b074eb806498468f06",
+      "translation_sha256": "ea0ccec0323859f233d3f27d5ddff6507fdd18e1585ff0f16e1ae2947fa5e6a7"
     },
     {
       "source": "third_party/vinbero/README.md",
