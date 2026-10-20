@@ -114,6 +114,7 @@ and fixed layout are in [architecture](architecture.md) and [address planning](a
 
 | Term | Meaning | In this lab |
 |---|---|---|
+| agent:ready | Bounded Issue task authorization label | Authorizes execution only when both the Issue author and latest label-grant actor are trusted; does not enable publishing, merging or live-lab operations. See [issue-development](issue-development.md) for the contract. |
 | free5gc-compose / UERANSIM | Containerized 5G core / simulated UE and gNB | Reference: Compose in core VM, six guests provisioned with KVM/libvirt and Ansible. Compact: core and other lab roles in Compose inside one KVM/libvirt guest, managed by `./lab` |
 | GoBGP / Vinbero | BGP library / MUP SRv6 implementation using eBPF | Controller and PEs intentionally use different pinned GoBGP versions; library capability is not a lab support claim |
 | Connect RPC / mupctl | Typed HTTP RPC interface / controller CLI | Status reads and suppression mutations are different operations; trusted-network binding is not API authentication |
