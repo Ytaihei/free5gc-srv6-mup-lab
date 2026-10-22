@@ -199,10 +199,13 @@ func (c *Controller) leaseValidLocked(now time.Time) bool {
 }
 
 func (c *Controller) reconcileLocked(leaseValid bool) error {
+	var cleanupErr error
 	if err := c.bgp.RetryWithdrawals(); err != nil {
-		return fmt.Errorf("pending BGP withdrawal: %w", err)
+		cleanupErr = fmt.Errorf("pending BGP withdrawal: %w", err)
 	}
-	var firstErr error
+	// Cleanup failure blocks additions, never independent required withdrawals.
+	// Finish the withdrawal pass before advertising anything so map iteration
+	// order cannot allow an addition ahead of a later failed withdrawal.
 	for _, s := range c.sessions {
 		decision := policy.Evaluate(c.cfg.Policy, s.session)
 		s.selected = decision.Selected && !s.suppressed && leaseValid
@@ -215,24 +218,29 @@ func (c *Controller) reconcileLocked(leaseValid bool) error {
 		}
 		fp := sessionFingerprint(s.session)
 		if s.advertised && (!s.selected || fp != s.fingerprint) {
-			if err := c.bgp.Withdraw(s.adv); err != nil && firstErr == nil {
-				firstErr = err
+			if err := c.bgp.Withdraw(s.adv); err != nil {
+				cleanupErr = errors.Join(cleanupErr, err)
 			}
 			s.advertised, s.adv = false, bgp.Advertisement{}
 		}
+	}
+	resultErr := cleanupErr
+	for _, s := range c.sessions {
 		if s.selected && !s.advertised {
+			if cleanupErr != nil {
+				s.reason = "bgp:error:" + cleanupErr.Error()
+				continue
+			}
 			adv, err := c.bgp.Advertise(s.session)
 			if err != nil {
 				s.reason = "bgp:error:" + err.Error()
-				if firstErr == nil {
-					firstErr = err
-				}
+				resultErr = errors.Join(resultErr, err)
 				continue
 			}
-			s.adv, s.advertised, s.fingerprint = adv, true, fp
+			s.adv, s.advertised, s.fingerprint = adv, true, sessionFingerprint(s.session)
 		}
 	}
-	return firstErr
+	return resultErr
 }
 
 func (c *Controller) selectedCountLocked() int {

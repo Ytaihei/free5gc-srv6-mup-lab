@@ -120,6 +120,11 @@ without changing the PFCP session.
   the observer lease is healthy. New advertisements are blocked while a retry
   fails; overlapping local NLRIs are rejected, not shared across sessions.
   Stale advertisement handles cannot withdraw a later pair using the same NLRI.
+- Reconciliation attempts every required withdrawal before starting new
+  advertisements. A failed pending retry or another session's withdrawal does
+  not prevent withdrawals for lease expiry, suppression, policy changes or
+  changed F-TEIDs. Cleanup errors are retained and returned; if any occurs in
+  that reconciliation, new advertisements wait for a later successful cleanup.
 - Withdrawal failure can temporarily leave routes installed. Cleanup state is
   in memory, not a durable queue; the one-second retry interval is not a recovery
   deadline. RPC errors and retry logs report failures. Status route counts track
@@ -137,7 +142,9 @@ without changing the PFCP session.
 
 Fault-injection tests in `internal/bgp/speaker_test.go` exercise real GoBGP
 UUID failures, scoped cleanup, retry, stale handles and withdrawal delivery to
-two loopback peers. Controller tests cover retry scheduling after session removal.
+two loopback peers. Controller tests cover retry scheduling after session removal,
+independent required withdrawals during cleanup failures, and blocked/recovered
+advertisements through reconciliation and suppression handlers.
 These are isolated regression checks, not new live-VM or packet-forwarding evidence.
 
 ## Observability plane

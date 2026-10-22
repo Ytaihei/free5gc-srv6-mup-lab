@@ -13,6 +13,7 @@ import (
 	"github.com/Ytaihei/free5gc-srv6-mup-lab/internal/bgp"
 	"github.com/Ytaihei/free5gc-srv6-mup-lab/internal/config"
 	"github.com/Ytaihei/free5gc-srv6-mup-lab/internal/model"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestSnapshotPolicySuppressionAndLeaseWithdrawal(t *testing.T) {
@@ -181,5 +182,128 @@ func TestReconcileBlocksNewWorkUntilPendingCleanupSucceeds(t *testing.T) {
 	}
 	if p.pending {
 		t.Fatal("successful retry kept pending state")
+	}
+}
+
+// Distinguish pending cleanup from an independently removable advertisement.
+// Unlike cleanupProbe, this fake permits successful withdrawals while retry fails.
+type withdrawalProbe struct {
+	retryErr    error
+	withdrawErr error
+	withdrawals int
+	advertised  []string
+}
+
+func (p *withdrawalProbe) Advertise(s model.Session) (bgp.Advertisement, error) {
+	p.advertised = append(p.advertised, s.Key)
+	return bgp.Advertisement{}, nil
+}
+func (p *withdrawalProbe) Withdraw(bgp.Advertisement) error {
+	p.withdrawals++
+	if p.withdrawErr != nil {
+		p.retryErr = p.withdrawErr
+	}
+	return p.withdrawErr
+}
+func (p *withdrawalProbe) RetryWithdrawals() error          { return p.retryErr }
+func (p *withdrawalProbe) PeerState(context.Context) string { return "2/2 established" }
+
+func withdrawalController() (*Controller, *withdrawalProbe) {
+	cfg := config.Config{Controller: config.Controller{Lease: time.Hour},
+		Policy: []config.PolicyRule{{Name: "internet", DNN: "internet", UEPrefix: "10.60.0.0/16", Action: "direct"}}}
+	c := New(cfg, nil)
+	p := &withdrawalProbe{}
+	c.bgp = p
+	c.lastSeen = time.Now()
+	s := model.Session{Key: "existing", UEIPv4: "10.60.0.1", DNN: "internet",
+		UPFGTPIPv4: "10.210.32.10", UplinkTEID: 100, RANGTPIPv4: "10.210.31.11", DownlinkTEID: 200, QFI: 9}
+	c.sessions[s.Key] = &controlled{session: s, advertised: true, fingerprint: sessionFingerprint(s)}
+	s.Key, s.UEIPv4, s.UplinkTEID = "new", "10.60.0.2", 101
+	c.sessions[s.Key] = &controlled{session: s}
+	return c, p
+}
+
+func TestPendingCleanupDoesNotBlockRequiredWithdrawals(t *testing.T) {
+	for _, scenario := range []string{"expired-lease", "suppressed", "policy-unselected", "changed-fteid"} {
+		for _, pendingFailure := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/pending=%v", scenario, pendingFailure), func(t *testing.T) {
+				c, p := withdrawalController()
+				pendingErr := errors.New("unrelated pending cleanup failed")
+				if pendingFailure {
+					p.retryErr = pendingErr
+				}
+				wantAds := 1 // The new session may be advertised only after successful cleanup.
+				switch scenario {
+				case "expired-lease":
+					c.lastSeen = time.Now().Add(-2 * time.Hour)
+					wantAds = 0
+				case "policy-unselected":
+					c.cfg.Policy = nil
+					wantAds = 0
+				case "changed-fteid":
+					c.sessions["existing"].session.UplinkTEID += 100
+					wantAds = 2 // Existing session must be replaced too.
+				}
+				var err error
+				if scenario == "suppressed" {
+					_, err = c.SetSuppression(context.Background(), connect.NewRequest(&mupv1.SetSuppressionRequest{Key: "existing", Suppressed: true}))
+				} else {
+					_, err = c.Reconcile(context.Background(), connect.NewRequest(&emptypb.Empty{}))
+				}
+				if pendingFailure {
+					if connect.CodeOf(err) != connect.CodeInternal || !errors.Is(err, pendingErr) {
+						t.Fatalf("pending cleanup error not preserved: %v", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if p.withdrawals != 1 {
+					t.Fatalf("required withdrawal attempts = %d, want 1", p.withdrawals)
+				}
+				if pendingFailure {
+					if len(p.advertised) != 0 || c.sessions["existing"].advertised {
+						t.Fatalf("advertised while cleanup failed: %v", p.advertised)
+					}
+					p.retryErr = nil
+					if _, err := c.Reconcile(context.Background(), connect.NewRequest(&emptypb.Empty{})); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if len(p.advertised) != wantAds || p.withdrawals != 1 {
+					t.Fatalf("after cleanup: advertisements=%v withdrawals=%d, want %d and 1", p.advertised, p.withdrawals, wantAds)
+				}
+			})
+		}
+	}
+}
+
+func TestNewWithdrawalFailureStillAttemptsEveryWithdrawalBeforeAdvertising(t *testing.T) {
+	for attempt := 0; attempt < 20; attempt++ {
+		// Map iteration must not let a new session advertise before a later
+		// required withdrawal fails, nor stop the remaining withdrawals.
+		c, p := withdrawalController()
+		first := c.sessions["existing"]
+		first.suppressed = true
+		second := *first
+		second.session.Key = "second"
+		second.session.UEIPv4, second.session.UplinkTEID, second.session.DownlinkTEID = "10.60.0.3", 102, 202
+		second.fingerprint = sessionFingerprint(second.session)
+		c.sessions["second"] = &second
+		withdrawErr := errors.New("new withdrawal failed")
+		p.withdrawErr = withdrawErr
+		err := c.reconcileLocked(true)
+		if !errors.Is(err, withdrawErr) || p.withdrawals != 2 || len(p.advertised) != 0 {
+			t.Fatalf("attempt %d: err=%v withdrawals=%d advertisements=%v", attempt, err, p.withdrawals, p.advertised)
+		}
+		if first.advertised || second.advertised {
+			t.Fatal("controller retained stale advertisement handles")
+		}
+		p.withdrawErr, p.retryErr = nil, nil
+		if err := c.reconcileLocked(true); err != nil {
+			t.Fatal(err)
+		}
+		if p.withdrawals != 2 || len(p.advertised) != 1 || p.advertised[0] != "new" {
+			t.Fatalf("cleanup recovery: withdrawals=%d advertisements=%v", p.withdrawals, p.advertised)
+		}
 	}
 }
