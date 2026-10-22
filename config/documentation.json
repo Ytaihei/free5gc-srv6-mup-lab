@@ -68,8 +68,8 @@
       "source": "README.md",
       "translation": "README.ja.md",
       "kind": "markdown",
-      "source_sha256": "4e5350333f74b21d14fb0d3f5943ea5d5d5930e766531f1b3fa3b1cc001591b9",
-      "translation_sha256": "9e523fab6595f3551f066d52b6b0ee3f83cb5074b59b34e31996ebc152951ffb"
+      "source_sha256": "2259078e6dec2275711026f46f7e19256688881b6c3d6368b876db75b8131fac",
+      "translation_sha256": "741acd2833420b08d3a69c1dc361352cc9afd1812266adb359d1d2bb2d538681"
     },
     {
       "source": "SECURITY.md",
@@ -96,8 +96,8 @@
       "source": "docs/architecture.md",
       "translation": "docs/architecture.ja.md",
       "kind": "markdown",
-      "source_sha256": "092069e9f5ce696a40648d8272917b6a9f39adeef910215cdfa456716973df32",
-      "translation_sha256": "aa0092c27ae988167cf0ab5edb563d61e9ad1c4ed0b677524023b56e21987f5b"
+      "source_sha256": "9ac33ab05e2689c620d9307e489cad4933599ca8d45b064b5c46e6571ab6f919",
+      "translation_sha256": "029dcf380aee7062841bf1717ae3ab4c8df4bae86af4d745928fa62763337d55"
     },
     {
       "source": "docs/clean-room-reproduction.md",
@@ -131,8 +131,8 @@
       "source": "docs/research-scope.md",
       "translation": "docs/research-scope.ja.md",
       "kind": "markdown",
-      "source_sha256": "11348621be4ec12589531b034e6b8b07e1997f05572e66ad295b28a33e46e998",
-      "translation_sha256": "62527a996dcc76b0a113b216ec5d79015b192d87a2946e3ac38ddde4f274880e"
+      "source_sha256": "afab3d1903be9dfaa833b5905709048f7ce6f177795ce1f82400b72cc8ffb690",
+      "translation_sha256": "49017749adb7ae1bf241061396596fa5d5121fbd868fc0bd95baae0338bdb81f"
     },
     {
       "source": "docs/source-distribution.md",
@@ -194,8 +194,8 @@
       "source": "docs/feature-status.md",
       "translation": "docs/feature-status.ja.md",
       "kind": "markdown",
-      "source_sha256": "d9754216d3013de6573148c877fd88faabe026865dd76599304edabdc7924a86",
-      "translation_sha256": "b723c12b632a6802da58653f91209fc88c457b0c85c93ceae540a1bd629e2414"
+      "source_sha256": "43beb1d74c2571ce3c925589554601219a7fc1919fa6fd29c8358126eb88405a",
+      "translation_sha256": "ff57fb1e98cd3eca77516dfadffd5cd4093f52d361d77084bfd2638bf77b1144"
     },
     {
       "source": "docs/glossary.md",

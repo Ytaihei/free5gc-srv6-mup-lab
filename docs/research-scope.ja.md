@@ -30,11 +30,13 @@ L0–L3を実装しています。ただし配備報告で各水準を主張で�
 - `draft-ietf-dmm-mup-architecture-02`
 - `draft-ietf-bess-mup-safi-01`
 - RFC 9433のSRv6 mobile user-plane behavior
-- MUP-CのGoBGP v4.9.0と両Vinbero PEのv4.8.0（意図的なMUP AFI/SAFI混在相互接続ベースライン）
+- MUP-CのGoBGP v4.10.0と両Vinbero PEのv4.8.0（意図的なMUP AFI/SAFI混在相互接続ベースライン）
 - Vinbero v0.1.1と `third_party/vinbero` の管理対象互換パッチ
 
 MUPの2文書はInternet-Draftです。各実験報告に、文書の正確な版、GoBGP、Vinberoコミット、カーネル、試験スクリプトのリビジョンを記録してください。
 
 コントローラー版は `go.mod`、PE版はVinberoパッチで指定します。旧 `gobgp_version` Ansible変数は公開ラボの有効なロールでは未使用です。コントローラーのType 1/2 UPDATEバイト列は `internal/bgp/wire_compat_test.go` の固定4.8.0 fixtureと照合します。変更後は実機のMUP、撤回、リース復旧、1call試験も必要であり、単体fixtureだけではPE転送の相互接続性を示せません。
+
+コントローラー依存物の更新は、新しい実機転送記録ではありません。9月の検証サマリーと例示PCAPは、元の4.9/4.8の基準を保持します。[4.10のリリース](https://github.com/osrg/gobgp/releases/tag/v4.10.0)には、別の経路ファミリーに加え、共通のピア・テーブル・撤回処理の変更もあります。MUP UPDATEの固定fixtureが不変であることだけでは、この更新の受け入れとして不十分です。
 
 今後の実装分野と受け入れ基準は[研究バックログ](research-backlog.ja.md)にあります。実機試験に合格するまでは計画であり、上記の実証済み水準を拡張しません。

@@ -74,9 +74,12 @@ class ReproducibilityTests(unittest.TestCase):
         module = (ROOT / 'go.mod').read_text()
         patch = (ROOT / 'third_party/vinbero/patches/0001-gobgp-v4.8-mup-draft01.patch').read_text()
         scope = (ROOT / 'docs/research-scope.md').read_text()
-        self.assertIn('github.com/osrg/gobgp/v4 v4.9.0', module)
+        self.assertIn('github.com/osrg/gobgp/v4 v4.10.0', module)
         self.assertIn('+\tgithub.com/osrg/gobgp/v4 v4.8.0', patch)
-        self.assertIn('GoBGP v4.9.0 in MUP-C and v4.8.0', scope)
+        self.assertIn('GoBGP v4.10.0 in MUP-C and v4.8.0', scope)
+        historical = (ROOT / 'docs/validation-summary.md').read_text()
+        self.assertIn('GoBGP 4.9.0 in', historical)
+        self.assertIn('not a new live forwarding record', scope)
 
     def test_original_go_tools_do_not_depend_on_late_gcc_installation(self):
         tasks = yaml.safe_load((ROOT / 'ansible/roles/mup_binaries/tasks/main.yml').read_text())

@@ -42,7 +42,7 @@ Normative and implementation baselines:
 - `draft-ietf-dmm-mup-architecture-02`
 - `draft-ietf-bess-mup-safi-01`
 - RFC 9433 SRv6 mobile user-plane behaviors
-- GoBGP v4.9.0 in MUP-C and v4.8.0 in both Vinbero PEs (intentional
+- GoBGP v4.10.0 in MUP-C and v4.8.0 in both Vinbero PEs (intentional
   mixed-version MUP AFI/SAFI interoperability baseline)
 - Vinbero v0.1.1 plus the tracked compatibility patch in `third_party/vinbero`
 
@@ -56,6 +56,12 @@ public lab's active roles. The controller's Type 1/2 UPDATE bytes are checked
 against frozen 4.8.0 fixtures in `internal/bgp/wire_compat_test.go`. A live MUP,
 withdrawal, lease-recovery and one-call gate is still required after changes;
 unit fixtures alone do not establish PE forwarding interoperability.
+
+The controller dependency update is not a new live forwarding record. The
+September validation summary and example PCAPs retain their original 4.9/4.8
+baseline. In particular, the [4.10 release](https://github.com/osrg/gobgp/releases/tag/v4.10.0)
+changes shared peer, table and withdrawal handling as well as unrelated families;
+unchanged MUP UPDATE fixtures alone are not sufficient acceptance for that update.
 
 Future implementation areas and acceptance criteria are maintained in
 [the research backlog](research-backlog.md). Items in that file

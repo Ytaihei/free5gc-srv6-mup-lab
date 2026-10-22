@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -27,10 +29,17 @@ type controlled struct {
 	adv         bgp.Advertisement
 }
 
+type routeSpeaker interface {
+	Advertise(model.Session) (bgp.Advertisement, error)
+	Withdraw(bgp.Advertisement) error
+	RetryWithdrawals() error
+	PeerState(context.Context) string
+}
+
 type Controller struct {
 	mu         sync.Mutex
 	cfg        config.Config
-	bgp        *bgp.Speaker
+	bgp        routeSpeaker
 	observerID string
 	generation uint64
 	lastSeen   time.Time
@@ -67,10 +76,11 @@ func (c *Controller) SyncSnapshot(_ context.Context, req *connect.Request[mupv1.
 		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("stale snapshot generation %d", req.Msg.Generation))
 	}
 	c.observerID, c.generation, c.lastSeen = req.Msg.ObserverId, req.Msg.Generation, now
+	var removalErr error
 	for key, current := range c.sessions {
 		if _, ok := next[key]; !ok {
 			if current.advertised {
-				_ = c.bgp.Withdraw(current.adv)
+				removalErr = errors.Join(removalErr, c.bgp.Withdraw(current.adv))
 			}
 			delete(c.sessions, key)
 		}
@@ -84,7 +94,7 @@ func (c *Controller) SyncSnapshot(_ context.Context, req *connect.Request[mupv1.
 		current.session = session
 		current.suppressed = c.suppressed[key]
 	}
-	if err := c.reconcileLocked(true); err != nil {
+	if err := errors.Join(removalErr, c.reconcileLocked(true)); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(&mupv1.SyncSnapshotResponse{
@@ -168,10 +178,18 @@ func (c *Controller) RunLease(ctx context.Context) {
 			return
 		case now := <-ticker.C:
 			c.mu.Lock()
+			var err error
 			if !c.leaseValidLocked(now) {
-				_ = c.reconcileLocked(false)
+				err = c.reconcileLocked(false)
+			} else {
+				// Cleanup must also progress while a healthy observer has
+				// already removed the failed session from its snapshot.
+				err = c.bgp.RetryWithdrawals()
 			}
 			c.mu.Unlock()
+			if err != nil {
+				log.Printf("BGP withdrawal retry failed: %v", err)
+			}
 		}
 	}
 }
@@ -181,7 +199,13 @@ func (c *Controller) leaseValidLocked(now time.Time) bool {
 }
 
 func (c *Controller) reconcileLocked(leaseValid bool) error {
-	var firstErr error
+	var cleanupErr error
+	if err := c.bgp.RetryWithdrawals(); err != nil {
+		cleanupErr = fmt.Errorf("pending BGP withdrawal: %w", err)
+	}
+	// Cleanup failure blocks additions, never independent required withdrawals.
+	// Finish the withdrawal pass before advertising anything so map iteration
+	// order cannot allow an addition ahead of a later failed withdrawal.
 	for _, s := range c.sessions {
 		decision := policy.Evaluate(c.cfg.Policy, s.session)
 		s.selected = decision.Selected && !s.suppressed && leaseValid
@@ -194,24 +218,29 @@ func (c *Controller) reconcileLocked(leaseValid bool) error {
 		}
 		fp := sessionFingerprint(s.session)
 		if s.advertised && (!s.selected || fp != s.fingerprint) {
-			if err := c.bgp.Withdraw(s.adv); err != nil && firstErr == nil {
-				firstErr = err
+			if err := c.bgp.Withdraw(s.adv); err != nil {
+				cleanupErr = errors.Join(cleanupErr, err)
 			}
 			s.advertised, s.adv = false, bgp.Advertisement{}
 		}
+	}
+	resultErr := cleanupErr
+	for _, s := range c.sessions {
 		if s.selected && !s.advertised {
+			if cleanupErr != nil {
+				s.reason = "bgp:error:" + cleanupErr.Error()
+				continue
+			}
 			adv, err := c.bgp.Advertise(s.session)
 			if err != nil {
 				s.reason = "bgp:error:" + err.Error()
-				if firstErr == nil {
-					firstErr = err
-				}
+				resultErr = errors.Join(resultErr, err)
 				continue
 			}
-			s.adv, s.advertised, s.fingerprint = adv, true, fp
+			s.adv, s.advertised, s.fingerprint = adv, true, sessionFingerprint(s.session)
 		}
 	}
-	return firstErr
+	return resultErr
 }
 
 func (c *Controller) selectedCountLocked() int {
